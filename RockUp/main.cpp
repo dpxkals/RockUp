@@ -28,12 +28,14 @@
 struct Shape {
     GLuint VAO;
     GLuint VBO;
-    GLuint CBO; // color buffer object
+    GLuint CBO; // color buffer object 
+    GLuint NBO;
     GLenum primitiveType;
     int vertexCount;
     float color[3];
     float tx, ty;
     std::vector<float> vertices;
+    std::vector<float> normals;
     std::vector<float> colors;
 
     GLfloat x = 0.0f, y = 0.0f, z = 0.0f;
@@ -205,10 +207,11 @@ void TimerFunction(int value)
 //--- 사용자 정의 함수
 
 //--- 기본 OPENGL함수
-void setupShapeBuffers(Shape& shape, const std::vector<float>& vertices, const std::vector<float>& colors) {
+void setupShapeBuffers(Shape& shape, const std::vector<float>& vertices, const std::vector<float>& colors, const std::vector<float>& normals) {
     glGenVertexArrays(1, &shape.VAO);
     glGenBuffers(1, &shape.VBO);
     glGenBuffers(1, &shape.CBO);
+    glGenBuffers(1, &shape.NBO);
 
     glBindVertexArray(shape.VAO);
 
@@ -218,11 +221,26 @@ void setupShapeBuffers(Shape& shape, const std::vector<float>& vertices, const s
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
     glEnableVertexAttribArray(0);
 
+    // 2. 법선 (Normal Vector) - [수정] 별도의 버퍼(NBO) 사용
+    glBindBuffer(GL_ARRAY_BUFFER, shape.NBO);
+    glBufferData(GL_ARRAY_BUFFER, normals.size() * sizeof(float), normals.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+    glEnableVertexAttribArray(1);
+
     // color
     glBindBuffer(GL_ARRAY_BUFFER, shape.CBO);
     glBufferData(GL_ARRAY_BUFFER, colors.size() * sizeof(float), colors.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+    glEnableVertexAttribArray(2);
+
+    glUseProgram(shaderProgramID);
+    unsigned int lightPosLocation = glGetUniformLocation(shaderProgramID, "lightPos"); //--- lightPos 값 전달: (0.0, 0.0, 5.0);
+    glUniform3f(lightPosLocation, 0.0, 1.0, 0.0);
+    unsigned int lightColorLocation = glGetUniformLocation(shaderProgramID, "lightColor"); //--- lightColor 값 전달: (1.0, 1.0, 1.0) 백색
+    glUniform3f(lightColorLocation, 1.0, 1.0, 1.0);
+    unsigned int viewPosLocation = glGetUniformLocation(shaderProgramID, "viewPos"); //--- viewPos 값 전달: 카메라 위치
+    glUniform3f(viewPosLocation, cameraPos.x, cameraPos.y, cameraPos.z);
+
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
