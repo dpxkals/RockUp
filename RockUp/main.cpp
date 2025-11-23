@@ -4,46 +4,63 @@
 #include <iostream>
 #include <vector>
 #include <string>
-#include <time.h> // for srand
+#include <time.h> 
 #include <algorithm>
-#include <cmath> // for sqrt
+#include <cmath> 
 
-// 링커 명령어 추가
 #pragma comment(lib, "glew32.lib")
 #pragma comment (lib, "freeglut.lib")
 
 #include <gl/glew.h>
 #include <gl/freeglut.h>
 #include <gl/freeglut_ext.h>
-
 #include <gl/glm/glm.hpp>
 #include <gl/glm/ext.hpp>
 #include <gl/glm/gtc/matrix_transform.hpp>
 
-// 구를 그리기 위한
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
+// --- 구조체 정의 ---
 struct Shape {
-    GLuint VAO;
-    GLuint VBO;
-    GLuint CBO; // color buffer object 
-    GLuint NBO;
+    GLuint VAO, VBO, CBO, NBO;
     GLenum primitiveType;
     int vertexCount;
     float color[3];
-    float tx, ty;
     std::vector<float> vertices;
     std::vector<float> normals;
     std::vector<float> colors;
 
     GLfloat x = 0.0f, y = 0.0f, z = 0.0f;
-    float size = 0.0f;
     char shapeType = ' ';
 };
 
-//--- 기본 사용자 정의 함수
+struct Player {
+    glm::vec3 position;
+    glm::vec3 velocity;
+    float radius;
+    bool isGrounded;
+
+    float acceleration;
+    float maxSpeed;
+    float friction;
+    float jumpForce;
+
+    Player() {
+        position = glm::vec3(0.0f, 5.0f, 0.0f);
+        velocity = glm::vec3(0.0f, 0.0f, 0.0f);
+        radius = 1.2f; // 거대 돌멩이
+        isGrounded = false;
+
+        acceleration = 0.008f;
+        maxSpeed = 0.3f;
+        friction = 0.96f;
+        jumpForce = 0.45f;
+    }
+};
+
+// --- 함수 프로토타입 ---
 void make_vertexShaders();
 void make_fragmentShaders();
 GLuint make_shaderProgram();
@@ -56,59 +73,61 @@ void Mouse(int button, int state, int x, int y);
 void Motion(int x, int y);
 void TimerFunction(int value);
 char* filetobuf(const char* file);
-//--- 사용자 정의 함수
-Shape* ShapeSave(std::vector<Shape>& shapeVector, char shapeKey, float, float, float, float);
+Shape* ShapeSave(std::vector<Shape>& shapeVector, char shapeKey, float r, float g, float b, float sx, float sy, float sz);
+void GenerateMap();
+void UpdatePhysics();
 
-//--- 기본 전역 변수
+// --- 전역 변수 ---
 GLint g_width = 800, g_height = 800;
 GLuint shaderProgramID;
-GLuint vertexShader;
-GLuint fragmentShader;
+GLuint vertexShader, fragmentShader;
 
-//--- 전역변수
 std::vector<Shape> shapes;
-// 뷰 변환 관련
-glm::vec3 cameraPos = glm::vec3(0.0f, 0.5f, 1.0f); // 카메라 위치
-glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f); // 카메라가 바라보는 점
-glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f); // 카메라의 Up 벡터
-float yAngle = 0.0f; // 회전 각도(원하면 키보드 등으로 조작)
-// 투영 모드 관리
-bool isPerspective = true; // true: 원근투영, false: 직교투영
+std::vector<std::pair<glm::vec3, glm::vec3>> mapBlocks;
 
-// 카메라 애니메이션 관련
-bool cameraAnimation = false; // 카메라 공전 애니메이션 상태
-float cameraAngle = 0.0f; // 카메라 공전 각도
-// 카메라 이동 및 회전 속도
-const float moveSpeed = 0.1f; // 카메라 이동 속도
-const float rotateSpeed = 5.0f; // 카메라 회전 속도
-float cameraOrbitRadius = 0.0f;
-float cameraOrbitY = 0.0f;
+// 카메라 제어 변수
+glm::vec3 cameraPos = glm::vec3(0.0f, 5.0f, 10.0f);
+glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+bool isPerspective = true;
 
-float lightRadius = 0.4f;     // 초기 광원 위치 (0, 0, 5)를 기준으로 반지름 설정
-float lightAngle = 90.0f;     // 초기 각도 (Z축)
-float lightHeight = 1.0f;     // Y축 높이 고정 (객체 중심)
+// 3인칭 카메라 변수
+float cameraYaw = 90.0f;
+float cameraPitch = 20.0f; // 약간 더 낮춰서 박진감 있게
+// [수정] 카메라를 구에 훨씬 가깝게 붙임 (15.0f)
+float cameraDistance = 15.0f;
+bool isDragging = false;
+int lastMouseX = 0, lastMouseY = 0;
+float mouseSensitivity = 0.3f;
 
-// 조명 키고끄기
-bool lightOn = true;
+// 조명 (항상 켜짐)
+float lightRadius = 50.0f;
+float lightAngle = 0.0f;
+float lightHeight = 50.0f;
 
-// 색 변경 변수
-int setColor = -1;
+// 플레이어
+Player rock;
+int playerShapeIndex = -1;
+bool keyState[256] = { false };
 
+// 맵 설정 (80x80)
+const int MAP_WIDTH = 80;
+const int MAP_HEIGHT = 150;
+const int MAP_DEPTH = 80;
 
-//--- main 함수
 void main(int argc, char** argv)
 {
-    srand(time(NULL));
+    srand((unsigned int)time(NULL));
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
     glutInitWindowPosition(100, 100);
     glutInitWindowSize(g_width, g_height);
-    glutCreateWindow("RockUp");
+    glutCreateWindow("ROCK UP - Wide Map & Close Cam");
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) {
-        std::cerr << "Glew Tnit failed." << std::endl;
+        std::cerr << "Glew Init failed." << std::endl;
         return;
     }
 
@@ -118,83 +137,273 @@ void main(int argc, char** argv)
 
     glutDisplayFunc(drawScene);
     glutReshapeFunc(Reshape);
-    glutKeyboardFunc(Keyboard);
+
+    glutKeyboardFunc([](unsigned char key, int x, int y) {
+        keyState[key] = true;
+        if (key == 'q') exit(0);
+        if (key == ' ') {
+            if (rock.isGrounded) {
+                float speed = sqrt(rock.velocity.x * rock.velocity.x + rock.velocity.z * rock.velocity.z);
+                float bonus = speed * 1.2f;
+                rock.velocity.y = rock.jumpForce + bonus;
+            }
+        }
+        // [수정] 'm' 키 기능 제거 (조명 항상 켜짐)
+        });
+    glutKeyboardUpFunc([](unsigned char key, int x, int y) {
+        keyState[key] = false;
+        });
+
     glutSpecialFunc(SpecialKeys);
     glutMouseFunc(Mouse);
     glutMotionFunc(Motion);
 
-    // 초기 그리기
-    ShapeSave(shapes, 'f', 1.0f, 0.0f, 1.0f, 0.5f);
+    GenerateMap();
 
-    ShapeSave(shapes, 'p', 1.0f, 0.0f, 0.0f, 0.2f);
+    // 플레이어 생성
+    Shape* pShape = ShapeSave(shapes, '1', 1.0f, 0.2f, 0.2f, rock.radius, rock.radius, rock.radius);
+    playerShapeIndex = shapes.size() - 1;
+    rock.position = glm::vec3(0.0f, 5.0f, 0.0f);
 
+    glutTimerFunc(16, TimerFunction, 0);
     glutMainLoop();
 }
 
-//--- drawScene: 화면에 그리기
+void GenerateMap() {
+    // 1. 초대형 바닥
+    float floorSize = MAP_WIDTH / 2.0f;
+    Shape* s = ShapeSave(shapes, 'c', 0.2f, 0.2f, 0.2f, floorSize, 1.0f, floorSize);
+    s->x = 0.0f; s->y = -2.0f; s->z = 0.0f;
+    mapBlocks.push_back({ glm::vec3(0, -2.0f, 0), glm::vec3(floorSize, 1.0f, floorSize) });
+
+    // 2. 맵 경계 벽
+    float wallHeight = MAP_HEIGHT / 2.0f + 50.0f;
+    float wallThickness = 5.0f;
+    float wallOffset = floorSize + wallThickness;
+
+    // 4면 벽 생성
+    Shape* w1 = ShapeSave(shapes, 'c', 0.5f, 0.5f, 0.5f, wallThickness, wallHeight, floorSize);
+    w1->x = wallOffset; w1->y = wallHeight - 10.0f; w1->z = 0.0f;
+    mapBlocks.push_back({ glm::vec3(w1->x, w1->y, w1->z), glm::vec3(wallThickness, wallHeight, floorSize) });
+
+    Shape* w2 = ShapeSave(shapes, 'c', 0.5f, 0.5f, 0.5f, wallThickness, wallHeight, floorSize);
+    w2->x = -wallOffset; w2->y = wallHeight - 10.0f; w2->z = 0.0f;
+    mapBlocks.push_back({ glm::vec3(w2->x, w2->y, w2->z), glm::vec3(wallThickness, wallHeight, floorSize) });
+
+    Shape* w3 = ShapeSave(shapes, 'c', 0.4f, 0.4f, 0.4f, floorSize, wallHeight, wallThickness);
+    w3->x = 0.0f; w3->y = wallHeight - 10.0f; w3->z = wallOffset;
+    mapBlocks.push_back({ glm::vec3(w3->x, w3->y, w3->z), glm::vec3(floorSize, wallHeight, wallThickness) });
+
+    Shape* w4 = ShapeSave(shapes, 'c', 0.4f, 0.4f, 0.4f, floorSize, wallHeight, wallThickness);
+    w4->x = 0.0f; w4->y = wallHeight - 10.0f; w4->z = -wallOffset;
+    mapBlocks.push_back({ glm::vec3(w4->x, w4->y, w4->z), glm::vec3(floorSize, wallHeight, wallThickness) });
+
+    // 3. [수정] 맵 전체를 활용하는 발판 배치
+    float currentX = 0.0f;
+    float currentZ = 0.0f;
+
+    for (int y = 0; y < MAP_HEIGHT; ++y) {
+        if (y % 2 != 0) continue; // 층 간격
+
+        // [핵심] 랜덤하게 맵 전체 범위(-35 ~ +35) 내에서 생성
+        // 기존의 '연속적인' 배치가 아니라, 점프해서 찾아가야 하는 구조
+        float range = (MAP_WIDTH / 2.0f) - 5.0f; // 벽 안쪽 범위
+
+        int blocksPerLayer = (rand() % 2) + 1; // 층당 1~2개
+        for (int i = 0; i < blocksPerLayer; ++i) {
+
+            // 완전히 랜덤한 위치 생성 (맵 전체 활용)
+            float nextX = ((rand() % 100) / 100.0f * (range * 2)) - range;
+            float nextZ = ((rand() % 100) / 100.0f * (range * 2)) - range;
+
+            // 발판 크기도 다양하게
+            float sx = 4.0f + (float)(rand() % 30) / 10.0f; // 4.0 ~ 7.0
+            float sz = 4.0f + (float)(rand() % 30) / 10.0f;
+            float sy = 0.5f;
+
+            float colorVal = (float)y / MAP_HEIGHT;
+            Shape* s = ShapeSave(shapes, 'c', colorVal, 0.6f, 1.0f - colorVal, sx, sy, sz);
+
+            s->x = nextX;
+            s->y = (float)y * 3.0f;
+            s->z = nextZ;
+
+            mapBlocks.push_back({ glm::vec3(nextX, s->y, nextZ), glm::vec3(sx, sy, sz) });
+        }
+    }
+}
+
+void Mouse(int button, int state, int x, int y) {
+    if (button == GLUT_LEFT_BUTTON) {
+        if (state == GLUT_DOWN) {
+            isDragging = true;
+            lastMouseX = x;
+            lastMouseY = y;
+        }
+        else if (state == GLUT_UP) {
+            isDragging = false;
+        }
+    }
+    glutPostRedisplay();
+}
+
+void Motion(int x, int y) {
+    if (isDragging) {
+        int dx = x - lastMouseX;
+        cameraYaw -= dx * mouseSensitivity;
+        lastMouseX = x;
+        lastMouseY = y;
+        glutPostRedisplay();
+    }
+}
+
+bool CheckCollision(glm::vec3 spherePos, float radius, glm::vec3 boxPos, glm::vec3 boxSize) {
+    float minX = boxPos.x - boxSize.x; float maxX = boxPos.x + boxSize.x;
+    float minY = boxPos.y - boxSize.y; float maxY = boxPos.y + boxSize.y;
+    float minZ = boxPos.z - boxSize.z; float maxZ = boxPos.z + boxSize.z;
+
+    float x = std::max(minX, std::min(spherePos.x, maxX));
+    float y = std::max(minY, std::min(spherePos.y, maxY));
+    float z = std::max(minZ, std::min(spherePos.z, maxZ));
+
+    float distance = sqrt(pow(x - spherePos.x, 2) + pow(y - spherePos.y, 2) + pow(z - spherePos.z, 2));
+    return distance < radius;
+}
+
+void UpdatePhysics() {
+    glm::vec3 viewDir = rock.position - cameraPos;
+    viewDir.y = 0.0f;
+    glm::vec3 forwardDir = glm::normalize(viewDir);
+    glm::vec3 rightDir = glm::normalize(glm::cross(forwardDir, glm::vec3(0.0f, 1.0f, 0.0f)));
+
+    if (keyState['w']) {
+        rock.velocity.x += forwardDir.x * rock.acceleration;
+        rock.velocity.z += forwardDir.z * rock.acceleration;
+    }
+    if (keyState['s']) {
+        rock.velocity.x -= forwardDir.x * rock.acceleration;
+        rock.velocity.z -= forwardDir.z * rock.acceleration;
+    }
+    if (keyState['d']) {
+        rock.velocity.x += rightDir.x * rock.acceleration;
+        rock.velocity.z += rightDir.z * rock.acceleration;
+    }
+    if (keyState['a']) {
+        rock.velocity.x -= rightDir.x * rock.acceleration;
+        rock.velocity.z -= rightDir.z * rock.acceleration;
+    }
+
+    float currentSpeedSq = rock.velocity.x * rock.velocity.x + rock.velocity.z * rock.velocity.z;
+    if (currentSpeedSq > rock.maxSpeed * rock.maxSpeed) {
+        float scale = rock.maxSpeed / sqrt(currentSpeedSq);
+        rock.velocity.x *= scale;
+        rock.velocity.z *= scale;
+    }
+
+    rock.velocity.y -= 0.012f;
+
+    glm::vec3 nextPos = rock.position + rock.velocity;
+    rock.isGrounded = false;
+
+    for (const auto& blockData : mapBlocks) {
+        glm::vec3 blockPos = blockData.first;
+        glm::vec3 blockSize = blockData.second;
+
+        if (CheckCollision(nextPos, rock.radius, blockPos, blockSize)) {
+            if (rock.position.y > blockPos.y + blockSize.y && rock.velocity.y < 0) {
+                rock.isGrounded = true;
+                rock.velocity.y = 0;
+                nextPos.y = blockPos.y + blockSize.y + rock.radius;
+            }
+            else {
+                rock.velocity.x *= -0.8f;
+                rock.velocity.z *= -0.8f;
+                nextPos = rock.position;
+            }
+        }
+    }
+
+    if (nextPos.y < -15.0f) {
+        rock.position = glm::vec3(0, 5.0f, 0);
+        rock.velocity = glm::vec3(0, 0, 0);
+    }
+    else {
+        rock.position = nextPos;
+    }
+
+    if (rock.isGrounded) {
+        rock.velocity.x *= rock.friction;
+        rock.velocity.z *= rock.friction;
+    }
+    else {
+        rock.velocity.x *= 0.995f;
+        rock.velocity.z *= 0.995f;
+    }
+
+    if (playerShapeIndex != -1) {
+        shapes[playerShapeIndex].x = rock.position.x;
+        shapes[playerShapeIndex].y = rock.position.y;
+        shapes[playerShapeIndex].z = rock.position.z;
+    }
+
+    float camX = cos(glm::radians(cameraYaw)) * cos(glm::radians(cameraPitch));
+    float camY = sin(glm::radians(cameraPitch));
+    float camZ = sin(glm::radians(cameraYaw)) * cos(glm::radians(cameraPitch));
+
+    glm::vec3 offset = glm::vec3(camX, camY, camZ) * cameraDistance;
+    cameraPos = rock.position + offset;
+    cameraTarget = rock.position;
+}
+
 GLvoid drawScene()
 {
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(shaderProgramID);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);        // 뒷면을 컬링 (추가)
+    glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
 
-    // 변환
-    unsigned int modelLoc = glGetUniformLocation(shaderProgramID, "model"); //--- 버텍스 세이더에서 모델링 변환 행렬 변수값을 받아온다.
-    unsigned int viewLoc = glGetUniformLocation(shaderProgramID, "view"); //--- 버텍스 세이더에서 뷰잉 변환 행렬 변수값을 받아온다.
-    unsigned int projLoc = glGetUniformLocation(shaderProgramID, "projection"); //--- 버텍스 세이더에서 투영 변환 행렬 변수값을 받아온다
+    unsigned int modelLoc = glGetUniformLocation(shaderProgramID, "model");
+    unsigned int viewLoc = glGetUniformLocation(shaderProgramID, "view");
+    unsigned int projLoc = glGetUniformLocation(shaderProgramID, "projection");
 
-    // 1. **광원 위치 계산 및 Uniform 전달** (가장 먼저 수행되어야 함)
     glm::vec3 currentLightPos;
-    // Y축을 중심으로 XZ 평면에서 회전 (공전)
-    currentLightPos.x = lightRadius * cos(glm::radians(lightAngle));
-    currentLightPos.y = lightHeight;
-    currentLightPos.z = lightRadius * sin(glm::radians(lightAngle));
+    currentLightPos.x = rock.position.x + lightRadius * cos(glm::radians(lightAngle));
+    currentLightPos.y = rock.position.y + lightHeight;
+    currentLightPos.z = rock.position.z + lightRadius * sin(glm::radians(lightAngle));
 
-    // 조명 Uniform 업데이트
-    unsigned int lightPosLocation = glGetUniformLocation(shaderProgramID, "lightPos");
-    glUniform3f(lightPosLocation, currentLightPos.x, currentLightPos.y, currentLightPos.z);
+    glUniform3f(glGetUniformLocation(shaderProgramID, "lightPos"), currentLightPos.x, currentLightPos.y, currentLightPos.z);
+    glUniform3f(glGetUniformLocation(shaderProgramID, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
 
-    // 모델 행렬 (회전)
+    // [수정] 조명 색상 항상 밝은 흰색으로 고정
+    glUniform3f(glGetUniformLocation(shaderProgramID, "lightColor"), 1.0f, 1.0f, 1.0f);
+
     glm::mat4 mTransform = glm::mat4(1.0f);
-    mTransform = glm::rotate(mTransform, glm::radians(yAngle), glm::vec3(0.0f, 1.0f, 0.0f));
-    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &mTransform[0][0]);
 
-    // 뷰 행렬 (카메라)
-    glm::mat4 vTransform = glm::mat4(1.0f);
-    vTransform = glm::lookAt(cameraPos, cameraTarget, cameraUp);
+    glm::mat4 vTransform = glm::lookAt(cameraPos, cameraTarget, cameraUp);
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &vTransform[0][0]);
 
-    // 프로젝션 행렬 (원근)
     glm::mat4 pTransform;
-    if (isPerspective) {
-        // 원근투영
-        pTransform = glm::perspective(glm::radians(60.0f), (float)g_width / (float)g_height, 0.1f, 200.0f);
-    }
+    if (isPerspective)
+        pTransform = glm::perspective(glm::radians(60.0f), (float)g_width / (float)g_height, 0.1f, 300.0f);
     else {
-        // 직교투영
-        float orthoSize = 1.0f; // 직교투영 크기 조절
+        float orthoSize = 40.0f;
         float aspect = (float)g_width / (float)g_height;
-        pTransform = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 200.0f);
+        pTransform = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 300.0f);
     }
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, &pTransform[0][0]);
 
     for (size_t i = 0; i < shapes.size(); ++i) {
         const auto& shape = shapes[i];
 
-        // 색 넘기기
-        GLint vColorLocation = glGetUniformLocation(shaderProgramID, "objectColor");
-        glUniform3fv(vColorLocation, 1, shape.color);
+        glUniform3fv(glGetUniformLocation(shaderProgramID, "objectColor"), 1, shape.color);
 
         glm::mat4 model = glm::mat4(1.0f);
-        glm::mat4 finalModel;
-
-        finalModel = mTransform * model;
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &finalModel[0][0]);
+        model = glm::translate(model, glm::vec3(shape.x, shape.y, shape.z));
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
 
         glBindVertexArray(shape.VAO);
         glDrawArrays(shape.primitiveType, 0, shape.vertexCount);
@@ -203,383 +412,145 @@ GLvoid drawScene()
     glutSwapBuffers();
 }
 
-//--- Mouse 콜백 함수
-void Mouse(int button, int state, int x, int y) {
-    float ogl_x = (float)x / g_width * 2.0f - 1.0f;
-    float ogl_y = -((float)y / g_height * 2.0f - 1.0f);
-
-    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
-
-    }
-
-    if (button == GLUT_LEFT_BUTTON && state == GLUT_UP) {
-
-    }
-
-    glutPostRedisplay();
-}
-
-GLvoid Keyboard(unsigned char key, int x, int y) {
-    switch (key) {
-    case 'm': {
-        lightOn = !lightOn;
-        unsigned int lightColorLocation = glGetUniformLocation(shaderProgramID, "lightColor"); //--- lightColor 값 전달: (1.0, 1.0, 1.0) 백색
-        if (lightOn) glUniform3f(lightColorLocation, 1.0, 1.0, 1.0);
-        else glUniform3f(lightColorLocation, 0.0, 0.0, 0.0);
-        break;
-    }
-    case 'q':
-        exit(0);
-        break;
-    }
-    glutPostRedisplay();
-}
-
-void SpecialKeys(int key, int x, int y) {
-    switch (key) {
-    case GLUT_KEY_UP:
-        break;
-    case GLUT_KEY_DOWN:
-        break;
-    case GLUT_KEY_LEFT:
-        break;
-    case GLUT_KEY_RIGHT:
-        break;
-    }
-    glutPostRedisplay();
-}
-
-void Motion(int x, int y) {
-
-}
-
 void TimerFunction(int value)
 {
-    glutPostRedisplay(); // 화면 다시 그리기
-    glutTimerFunc(16, TimerFunction, 0); // 다음 타이머 설정
-}
-//--- 사용자 정의 함수
-Shape* ShapeSave(std::vector<Shape>& shapeVector, char shapeKey, float r, float g, float b, float sz)
-{
-    Shape newShape;
-    float size = 1.0f;
-    float s = sz;
-    newShape.color[0] = r; newShape.color[1] = g; newShape.color[2] = b;
-
-    // 바닥
-    if (shapeKey == 'f') {
-        newShape.primitiveType = GL_TRIANGLES;
-        s = 0.5f;
-        newShape.vertices = {
-            // 아랫면 (y = -s) - CCW
-            -s,  0,  s,   s,  0,  s,   s,  0, -s,
-            -s,  0,  s,   s,  0, -s,  -s,  0, -s,
-        };
-        newShape.normals = {
-            0.0f, 1.0f, 0.0f,   0.0f, 1.0f, 0.0f,    0.0f, 1.0f, 0.0f,
-            0.0f, 1.0f, 0.0f,   0.0f, 1.0f, 0.0f,    0.0f, 1.0f, 0.0f,
-        };
-        newShape.vertexCount = 6;
-    }
-    // 정육면체
-    else if (shapeKey == 'c') {
-        newShape.primitiveType = GL_TRIANGLES;
-        newShape.vertices = {
-            // 앞면 (z = +s) - CCW
-            -s, -s,  s,   s, -s,  s,   s,  s,  s,
-            -s, -s,  s,   s,  s,  s,  -s,  s,  s,
-
-            // 뒷면 (z = -s) - CCW (뒤에서 볼 때)
-            -s, -s, -s,  -s,  s, -s,   s,  s, -s,
-            -s, -s, -s,   s,  s, -s,   s, -s, -s,
-
-            // 왼쪽면 (x = -s) - CCW
-            -s, -s, -s,  -s, -s,  s,  -s,  s,  s,
-            -s, -s, -s,  -s,  s,  s,  -s,  s, -s,
-
-            // 오른쪽면 (x = +s) - CCW
-             s, -s,  s,   s, -s, -s,   s,  s, -s,
-             s, -s,  s,   s,  s, -s,   s,  s,  s,
-
-             // 윗면 (y = +s) - CCW
-             -s,  s,  s,   s,  s,  s,   s,  s, -s,
-             -s,  s,  s,   s,  s, -s,  -s,  s, -s,
-
-             // 아랫면 (y = -s) - CCW
-             -s, -s, -s,   s, -s, -s,   s, -s,  s,
-             -s, -s, -s,   s, -s,  s,  -s, -s,  s,
-        };
-        newShape.normals = {
-            // 앞면 (z = +s) - CCW
-            0.0f,0.0f,1.0f,     0.0f,0.0f,1.0f,     0.0f,0.0f,1.0f,
-            0.0f,0.0f,1.0f,     0.0f,0.0f,1.0f,     0.0f,0.0f,1.0f,
-
-            // 뒷면 (z = -s) - CCW (뒤에서 볼 때)
-            0.0f,0.0f,-1.0f,    0.0f,0.0f,-1.0f,    0.0f,0.0f,-1.0f,
-            0.0f,0.0f,-1.0f,    0.0f,0.0f,-1.0f,    0.0f,0.0f,-1.0f,
-
-            // 왼쪽면 (x = -s) - CCW
-            -1.0f,0.0f,0.0f,    -1.0f,0.0f,0.0f,   -1.0f,0.0f,0.0f,
-            -1.0f,0.0f,0.0f,    -1.0f,0.0f,0.0f,   -1.0f,0.0f,0.0f,
-
-            // 오른쪽면 (x = +s) - CCW
-            1.0f,0.0f,0.0f,     1.0f,0.0f,0.0f,     1.0f,0.0f,0.0f,
-            1.0f,0.0f,0.0f,     1.0f,0.0f,0.0f,     1.0f,0.0f,0.0f,
-
-            // 윗면 (y = +s) - CCW
-            0.0f,1.0f,0.0f,    0.0f,1.0f,0.0f,     0.0f,1.0f,0.0f,
-            0.0f,1.0f,0.0f,    0.0f,1.0f,0.0f,     0.0f,1.0f,0.0f,
-
-            // 아랫면 (y = -s) - CCW
-            0.0f,-1.0f,0.0f,   0.0f,-1.0f,0.0f,    0.0f,-1.0f,0.0f,
-            0.0f,-1.0f,0.0f,   0.0f,-1.0f,0.0f,    0.0f,-1.0f,0.0f,
-        };
-        newShape.vertexCount = 36;
-        // 정점별 랜덤 색상 할당
-        for (int i = 0; i < newShape.vertexCount; ++i) {
-            float r = 0.0f;
-            float g = 0.7f;
-            float b = 0.0f;
-            newShape.colors.push_back(r);
-            newShape.colors.push_back(g);
-            newShape.colors.push_back(b);
-        }
-    }
-    // 사각뿔
-    else if (shapeKey == 'p') { // 사각뿔
-
-        const float Ny = 0.447f;
-        const float Nxz = 0.894f;
-
-        newShape.primitiveType = GL_TRIANGLES;
-        // 밑면 2개 삼각형, 옆면 4개 삼각형
-        newShape.vertices = {
-            // 밑면 - CCW로 수정
-                -s, 0, -s,   s, 0, -s,   s, 0,  s,
-                -s, 0, -s,   s, 0,  s,  -s, 0,  s,
-
-                // 앞면 (Z=-s): 노멀 (0.0, Ny, -Nxz)
-                -s, 0, -s,   0,  2 * s,  0,   s, 0, -s,
-
-                // 오른면 (X=s): 노멀 (Nxz, Ny, 0.0)
-                 s, 0, -s,   0,  2 * s,  0,   s, 0,  s,
-
-                 // 뒷면 (Z=s): 노멀 (0.0, Ny, Nxz)
-                  s, 0,  s,   0,  2 * s,  0,  -s, 0,  s,
-
-                  // 왼면 (X=-s): 노멀 (-Nxz, Ny, 0.0)
-                  -s, 0,  s,  0,  2 * s,  0,  -s, 0, -s };
-        newShape.normals = {
-            0.0f,-1.0f,0.0f,    0.0f,-1.0f,0.0f,    0.0f,-1.0f,0.0f,
-            0.0f,-1.0f,0.0f,    0.0f,-1.0f,0.0f,    0.0f,-1.0f,0.0f,
-
-            0.0f, Ny,-Nxz,      0.0f, Ny,-Nxz,      0.0f, Ny,-Nxz,
-            Nxz, Ny, 0.0f,      Nxz, Ny, 0.0f,      Nxz, Ny, 0.0f,
-            0.0f, Ny, Nxz,      0.0f, Ny, Nxz,      0.0f, Ny, Nxz,
-            -Nxz, Ny, 0.0f,     -Nxz, Ny, 0.0f,     -Nxz, Ny, 0.0f,
-        };
-        newShape.vertexCount = 18;
-    }
-    else if (shapeKey == '1') { // 구 (sphere)
-        newShape.primitiveType = GL_TRIANGLES;
-        float radius = s;
-        int sectors = 20;  // 경도 분할 수
-        int stacks = 20;   // 위도 분할 수
-
-        std::vector<float> tempVertices; // 이름 변경: vertices -> tempVertices (혼동 방지)
-        std::vector<float> tempNormals;  // [추가] 임시 법선 벡터 저장소
-        // std::vector<unsigned int> indices; // (사용되지 않으므로 주석 처리)
-
-        float r = static_cast<float>(rand()) / RAND_MAX;
-        float g = static_cast<float>(rand()) / RAND_MAX;
-        float b = static_cast<float>(rand()) / RAND_MAX;
-
-        // 1. 구의 정점 및 법선 계산 (임시 저장)
-        for (int i = 0; i <= stacks; ++i) {
-            float stackAngle = M_PI / 2 - i * M_PI / stacks;
-            float xy = radius * cosf(stackAngle);
-            float z = radius * sinf(stackAngle);
-
-            for (int j = 0; j <= sectors; ++j) {
-                float sectorAngle = j * 2 * M_PI / sectors;
-                float x = xy * cosf(sectorAngle);
-                float y = xy * sinf(sectorAngle);
-
-                // 위치 저장
-                tempVertices.push_back(x);
-                tempVertices.push_back(y);
-                tempVertices.push_back(z);
-
-                // [추가] 법선 벡터 계산 및 저장
-                // 구의 법선 = (x,y,z) / 반지름
-                // 정규화된 벡터 (길이가 1)
-                tempNormals.push_back(x / radius);
-                tempNormals.push_back(y / radius);
-                tempNormals.push_back(z / radius);
-            }
-        }
-
-        // 2. 삼각형 조립 (위치와 법선을 함께 newShape에 넣기)
-        for (int i = 0; i < stacks; ++i) {
-            int k1 = i * (sectors + 1);
-            int k2 = k1 + sectors + 1;
-
-            for (int j = 0; j < sectors; ++j, ++k1, ++k2) {
-                // 람다 함수: 코드 중복을 줄이기 위해 데이터를 넣는 도우미
-                // 위치와 법선 데이터를 해당 인덱스에서 가져와서 newShape에 넣음
-                auto pushVertexData = [&](int index) {
-                    // 위치 (x, y, z)
-                    newShape.vertices.push_back(tempVertices[index * 3]);
-                    newShape.vertices.push_back(tempVertices[index * 3 + 1]);
-                    newShape.vertices.push_back(tempVertices[index * 3 + 2]);
-
-                    // [추가] 법선 (nx, ny, nz) -> newShape에 normals 벡터가 있다고 가정
-                    newShape.normals.push_back(tempNormals[index * 3]);
-                    newShape.normals.push_back(tempNormals[index * 3 + 1]);
-                    newShape.normals.push_back(tempNormals[index * 3 + 2]);
-                    };
-
-                if (i != 0) {
-                    // 첫 번째 삼각형 (k1, k2, k1+1)
-                    pushVertexData(k1);
-                    pushVertexData(k2);
-                    pushVertexData(k1 + 1);
-                }
-
-                if (i != (stacks - 1)) {
-                    // 두 번째 삼각형 (k1+1, k2, k2+1)
-                    pushVertexData(k1 + 1);
-                    pushVertexData(k2);
-                    pushVertexData(k2 + 1);
-                }
-            }
-        }
-
-        newShape.vertexCount = newShape.vertices.size() / 3;
-
-        // 정점별 랜덤 색상 할당 (기존 코드 유지)
-        for (int i = 0; i < newShape.vertexCount; ++i) {
-            newShape.colors.push_back(r);
-            newShape.colors.push_back(g);
-            newShape.colors.push_back(b);
-        }
-    }
-
-    setupShapeBuffers(newShape, newShape.vertices, newShape.colors, newShape.normals);
-    shapeVector.push_back(newShape);
-    return &shapeVector.back();
+    UpdatePhysics();
+    lightAngle += 0.5f;
+    if (lightAngle >= 360.0f) lightAngle -= 360.0f;
+    glutPostRedisplay();
+    glutTimerFunc(16, TimerFunction, 0);
 }
 
-//--- 기본 OPENGL함수
-void setupShapeBuffers(Shape& shape, const std::vector<float>& vertices, const std::vector<float>& colors, const std::vector<float>& normals) {
-    glGenVertexArrays(1, &shape.VAO);
-    glGenBuffers(1, &shape.VBO);
-    glGenBuffers(1, &shape.CBO);
-    glGenBuffers(1, &shape.NBO);
-
-    glBindVertexArray(shape.VAO);
-
-    // vertex
-    glBindBuffer(GL_ARRAY_BUFFER, shape.VBO);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    glEnableVertexAttribArray(0);
-
-    // 2. 법선 (Normal Vector) - [수정] 별도의 버퍼(NBO) 사용
-    glBindBuffer(GL_ARRAY_BUFFER, shape.NBO);
-    glBufferData(GL_ARRAY_BUFFER, normals.size() * sizeof(float), normals.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    glEnableVertexAttribArray(1);
-
-    // color
-    glBindBuffer(GL_ARRAY_BUFFER, shape.CBO);
-    glBufferData(GL_ARRAY_BUFFER, colors.size() * sizeof(float), colors.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    glEnableVertexAttribArray(2);
-
-    glUseProgram(shaderProgramID);
-    unsigned int lightPosLocation = glGetUniformLocation(shaderProgramID, "lightPos"); //--- lightPos 값 전달: (0.0, 0.0, 5.0);
-    glUniform3f(lightPosLocation, 0.0, 1.0, 0.0);
-    unsigned int lightColorLocation = glGetUniformLocation(shaderProgramID, "lightColor"); //--- lightColor 값 전달: (1.0, 1.0, 1.0) 백색
-    glUniform3f(lightColorLocation, 1.0, 1.0, 1.0);
-    unsigned int viewPosLocation = glGetUniformLocation(shaderProgramID, "viewPos"); //--- viewPos 값 전달: 카메라 위치
-    glUniform3f(viewPosLocation, cameraPos.x, cameraPos.y, cameraPos.z);
-
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-}
-
-GLvoid Reshape(int w, int h)
-{
-    g_width = w;
-    g_height = h;
+void SpecialKeys(int key, int x, int y) { glutPostRedisplay(); }
+GLvoid Reshape(int w, int h) {
+    g_width = w; g_height = h;
     glViewport(0, 0, w, h);
 }
 
-char* filetobuf(const char* file)
-{
-    FILE* fptr;
-    long length;
-    char* buf;
+char* filetobuf(const char* file) {
+    FILE* fptr; long length; char* buf;
     fptr = fopen(file, "rb");
     if (!fptr) return NULL;
-    fseek(fptr, 0, SEEK_END);
-    length = ftell(fptr);
+    fseek(fptr, 0, SEEK_END); length = ftell(fptr);
     buf = (char*)malloc(length + 1);
-    fseek(fptr, 0, SEEK_SET);
-    fread(buf, length, 1, fptr);
-    fclose(fptr);
-    buf[length] = 0;
-    return buf;
+    fseek(fptr, 0, SEEK_SET); fread(buf, length, 1, fptr);
+    fclose(fptr); buf[length] = 0; return buf;
 }
-
-void make_vertexShaders()
-{
-    GLchar* vertexSource;
-    vertexSource = filetobuf("vertex.glsl");
+void make_vertexShaders() {
+    GLchar* vertexSource = filetobuf("vertex.glsl");
     vertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertexShader, 1, &vertexSource, NULL);
     glCompileShader(vertexShader);
-    GLint result;
-    GLchar errorLog[512];
-    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &result);
-    if (!result) {
-        glGetShaderInfoLog(vertexShader, 512, NULL, errorLog);
-        std::cerr << "ERROR: vertex shader compile failed\n" << errorLog << std::endl;
-    }
 }
-
-void make_fragmentShaders()
-{
-    GLchar* fragmentSource;
-    fragmentSource = filetobuf("fragment.glsl");
+void make_fragmentShaders() {
+    GLchar* fragmentSource = filetobuf("fragment.glsl");
     fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fragmentShader, 1, &fragmentSource, NULL);
     glCompileShader(fragmentShader);
-    GLint result;
-    GLchar errorLog[512];
-    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &result);
-    if (!result) {
-        glGetShaderInfoLog(fragmentShader, 512, NULL, errorLog);
-        std::cerr << "ERROR: fragment shader compile failed\n" << errorLog << std::endl;
-    }
 }
-
-GLuint make_shaderProgram()
-{
+GLuint make_shaderProgram() {
     GLuint shaderID = glCreateProgram();
     glAttachShader(shaderID, vertexShader);
     glAttachShader(shaderID, fragmentShader);
     glLinkProgram(shaderID);
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
-    GLint result;
-    GLchar errorLog[512];
-    glGetProgramiv(shaderID, GL_LINK_STATUS, &result);
-    if (!result) {
-        glGetProgramInfoLog(shaderID, 512, NULL, errorLog);
-        std::cerr << "ERROR: shader program link failed\n" << errorLog << std::endl;
-    }
     return shaderID;
+}
+
+void setupShapeBuffers(Shape& shape, const std::vector<float>& vertices, const std::vector<float>& colors, const std::vector<float>& normals) {
+    glGenVertexArrays(1, &shape.VAO);
+    glGenBuffers(1, &shape.VBO); glGenBuffers(1, &shape.CBO); glGenBuffers(1, &shape.NBO);
+    glBindVertexArray(shape.VAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, shape.VBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); glEnableVertexAttribArray(0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, shape.NBO);
+    glBufferData(GL_ARRAY_BUFFER, normals.size() * sizeof(float), normals.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); glEnableVertexAttribArray(1);
+
+    glBindBuffer(GL_ARRAY_BUFFER, shape.CBO);
+    glBufferData(GL_ARRAY_BUFFER, colors.size() * sizeof(float), colors.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); glEnableVertexAttribArray(2);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
+}
+
+Shape* ShapeSave(std::vector<Shape>& shapeVector, char shapeKey, float r, float g, float b, float sx, float sy, float sz)
+{
+    Shape newShape;
+    newShape.color[0] = r; newShape.color[1] = g; newShape.color[2] = b;
+    newShape.shapeType = shapeKey;
+
+    if (shapeKey == 'c') {
+        newShape.primitiveType = GL_TRIANGLES;
+        float x = sx, y = sy, z = sz;
+        newShape.vertices = {
+            -x,-y,z, x,-y,z, x,y,z, -x,-y,z, x,y,z, -x,y,z,
+            -x,-y,-z, -x,y,-z, x,y,-z, -x,-y,-z, x,y,-z, x,-y,-z,
+            -x,-y,-z, -x,-y,z, -x,y,z, -x,-y,-z, -x,y,z, -x,y,-z,
+             x,-y,z, x,-y,-z, x,y,-z, x,-y,z, x,y,-z, x,y,z,
+            -x,y,z, x,y,z, x,y,-z, -x,y,z, x,y,-z, -x,y,-z,
+            -x,-y,-z, x,-y,-z, x,-y,z, -x,-y,-z, x,-y,z, -x,-y,z
+        };
+        newShape.normals = {
+            0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1,
+            0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1,
+            -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0,
+             1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0,
+             0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0,
+             0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0
+        };
+        newShape.vertexCount = 36;
+    }
+    else if (shapeKey == '1') {
+        newShape.primitiveType = GL_TRIANGLES;
+        float radius = sx;
+        int sectors = 30; int stacks = 30;
+        std::vector<float> tempV, tempN;
+
+        for (int i = 0; i <= stacks; ++i) {
+            float stackAngle = M_PI / 2 - i * M_PI / stacks;
+            float xy = radius * cosf(stackAngle);
+            float z = radius * sinf(stackAngle);
+            for (int j = 0; j <= sectors; ++j) {
+                float sectorAngle = j * 2 * M_PI / sectors;
+                float x = xy * cosf(sectorAngle);
+                float y = xy * sinf(sectorAngle);
+                tempV.push_back(x); tempV.push_back(y); tempV.push_back(z);
+                tempN.push_back(x / radius); tempN.push_back(y / radius); tempN.push_back(z / radius);
+            }
+        }
+        for (int i = 0; i < stacks; ++i) {
+            int k1 = i * (sectors + 1); int k2 = k1 + sectors + 1;
+            for (int j = 0; j < sectors; ++j, ++k1, ++k2) {
+                if (i != 0) {
+                    newShape.vertices.push_back(tempV[k1 * 3]); newShape.vertices.push_back(tempV[k1 * 3 + 1]); newShape.vertices.push_back(tempV[k1 * 3 + 2]);
+                    newShape.normals.push_back(tempN[k1 * 3]); newShape.normals.push_back(tempN[k1 * 3 + 1]); newShape.normals.push_back(tempN[k1 * 3 + 2]);
+                    newShape.vertices.push_back(tempV[k2 * 3]); newShape.vertices.push_back(tempV[k2 * 3 + 1]); newShape.vertices.push_back(tempV[k2 * 3 + 2]);
+                    newShape.normals.push_back(tempN[k2 * 3]); newShape.normals.push_back(tempN[k2 * 3 + 1]); newShape.normals.push_back(tempN[k2 * 3 + 2]);
+                    newShape.vertices.push_back(tempV[(k1 + 1) * 3]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 1]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 2]);
+                    newShape.normals.push_back(tempN[(k1 + 1) * 3]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 1]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 2]);
+                }
+                if (i != (stacks - 1)) {
+                    newShape.vertices.push_back(tempV[(k1 + 1) * 3]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 1]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 2]);
+                    newShape.normals.push_back(tempN[(k1 + 1) * 3]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 1]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 2]);
+                    newShape.vertices.push_back(tempV[k2 * 3]); newShape.vertices.push_back(tempV[k2 * 3 + 1]); newShape.vertices.push_back(tempV[k2 * 3 + 2]);
+                    newShape.normals.push_back(tempN[k2 * 3]); newShape.normals.push_back(tempN[k2 * 3 + 1]); newShape.normals.push_back(tempN[k2 * 3 + 2]);
+                    newShape.vertices.push_back(tempV[(k2 + 1) * 3]); newShape.vertices.push_back(tempV[(k2 + 1) * 3 + 1]); newShape.vertices.push_back(tempV[(k2 + 1) * 3 + 2]);
+                    newShape.normals.push_back(tempN[(k2 + 1) * 3]); newShape.normals.push_back(tempN[(k2 + 1) * 3 + 1]); newShape.normals.push_back(tempN[(k2 + 1) * 3 + 2]);
+                }
+            }
+        }
+        newShape.vertexCount = newShape.vertices.size() / 3;
+    }
+
+    for (int i = 0; i < newShape.vertexCount; ++i) {
+        newShape.colors.push_back(r); newShape.colors.push_back(g); newShape.colors.push_back(b);
+    }
+    setupShapeBuffers(newShape, newShape.vertices, newShape.colors, newShape.normals);
+    shapeVector.push_back(newShape);
+    return &shapeVector.back();
 }
