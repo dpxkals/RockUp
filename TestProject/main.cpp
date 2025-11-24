@@ -1,7 +1,9 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
+#include <cstring>
+#include <sstream>
+#include <fstream>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -86,6 +88,11 @@ GLuint vertexShader, fragmentShader;
 std::vector<Shape> shapes;
 std::vector<std::pair<glm::vec3, glm::vec3>> mapBlocks;
 
+// OBJ 맵을 위한 전역 변수
+GLuint mapVAO;
+size_t mapVertexCount = 0;
+
+
 // 카메라 제어 변수
 glm::vec3 cameraPos = glm::vec3(0.0f, 5.0f, 10.0f);
 glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -116,186 +123,121 @@ const int MAP_WIDTH = 80;
 const int MAP_HEIGHT = 150;
 const int MAP_DEPTH = 80;
 
-struct Vertex {
-    float x, y, z;
+// 1. OpenGL에 넘겨줄 최종 정점 구조체 (Interleaved Vertex Data)
+struct GLVertex {
+    float x, y, z;       // 위치 (Position)
+    float u, v;          // 텍스처 좌표 (Texture UV)
+    float nx, ny, nz;    // 노말 벡터 (Normal)
 };
-struct Face {
-    unsigned int v1, v2, v3;
-    unsigned int vt1, vt2, vt3;
-    unsigned int n1, n2, n3;
-};
-
-struct Normal {
-    float x, y, z;
-};
-
-struct TextureCoord {
-    float u, v, z;
-};
-
+// 2. 모델 데이터 구조체
 struct Model {
-    Vertex* vertices;
-    size_t vertex_count;
-
-    TextureCoord* texCoords;
-    size_t texCoord_count;
-
-    Normal* normals;
-    size_t normal_count;
-
-    Face* faces;
-    size_t face_count;
+    GLVertex* vertices;     // 정점 배열 (메모리 할당 됨)
+    size_t vertex_count;    // 정점 개수 (glDrawArrays에서 사용)
 };
 
-// --- 2. OBJ 파일 파싱 함수 ---
+// 3. OBJ 파일 파싱 함수
 Model loadObj(const char* filename) {
-    Model model = { 0 }; // 0으로 초기화
-    FILE* file = fopen(filename, "r");
+    Model model = { nullptr, 0 };
 
-    if (!file) {
-        printf("파일을 열 수 없습니다: %s\n", filename);
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "ERROR: 파일을 열 수 없습니다: " << filename << std::endl;
         return model;
     }
 
-    // [Pass 1] 개수 세기 (메모리 할당을 위해)
-    char lineHeader[128];
-    while (fscanf(file, "%s", lineHeader) != EOF) {
-        if (strcmp(lineHeader, "v") == 0) model.vertex_count++;
-        else if (strcmp(lineHeader, "vt") == 0) model.texCoord_count++;
-        else if (strcmp(lineHeader, "vn") == 0) model.normal_count++;
-        else if (strcmp(lineHeader, "f") == 0) model.face_count++;
-    }
+    // 파일 읽기 속도를 위한 임시 저장소 (std::vector 사용)
+    std::vector<float> temp_positions;
+    std::vector<float> temp_uvs;
+    std::vector<float> temp_normals;
+    std::vector<GLVertex> final_vertices; // 최종 데이터가 모일 곳
 
-    // [Memory Allocation] 개수에 맞춰 메모리 할당
-    model.vertices = new Vertex[model.vertex_count];
-    model.texCoords = new TextureCoord[model.texCoord_count];
-    model.normals = new Normal[model.normal_count];
-    model.faces = new Face[model.face_count];
+    std::string line;
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string type;
+        ss >> type;
 
-    printf("개수 확인 -> v: %zu, vt: %zu, vn: %zu, f: %zu\n",
-        model.vertex_count, model.texCoord_count, model.normal_count, model.face_count);
-
-    // [Pass 2] 데이터 채우기
-    fseek(file, 0, SEEK_SET); // 파일 포인터를 맨 처음으로 되돌림
-
-    // 현재 채워넣을 배열의 인덱스들
-    size_t v_idx = 0, vt_idx = 0, vn_idx = 0, f_idx = 0;
-
-    while (fscanf(file, "%s", lineHeader) != EOF) {
-        if (strcmp(lineHeader, "v") == 0) {
-            fscanf(file, "%f %f %f\n",
-                &model.vertices[v_idx].x,
-                &model.vertices[v_idx].y,
-                &model.vertices[v_idx].z);
-            v_idx++;
+        if (type == "v") { // 위치
+            float x, y, z;
+            ss >> x >> y >> z;
+            temp_positions.push_back(x); temp_positions.push_back(y); temp_positions.push_back(z);
         }
-        else if (strcmp(lineHeader, "vt") == 0) {
-            fscanf(file, "%f %f %f\n",
-                &model.texCoords[vt_idx].u,
-                &model.texCoords[vt_idx].v,
-                &model.texCoords[vt_idx].z);
-            vt_idx++;
+        else if (type == "vt") { // 텍스처 좌표
+            float u, v, z;
+            ss >> u >> v;
+            // z값은 보통 있으면 읽고 버림, 2개만 읽어도 됨
+            temp_uvs.push_back(u); temp_uvs.push_back(v);
         }
-        else if (strcmp(lineHeader, "vn") == 0) {
-            fscanf(file, "%f %f %f\n",
-                &model.normals[vn_idx].x,
-                &model.normals[vn_idx].y,
-                &model.normals[vn_idx].z);
-            vn_idx++;
+        else if (type == "vn") { // 노말
+            float x, y, z;
+            ss >> x >> y >> z;
+            temp_normals.push_back(x); temp_normals.push_back(y); temp_normals.push_back(z);
         }
-        else if (strcmp(lineHeader, "f") == 0) {
-            // 임시 변수 (OBJ는 인덱스가 1부터 시작하므로 나중에 1을 빼줘야 함)
-            unsigned int v[3], vt[3], vn[3];
+        else if (type == "f") { // 면 (Face) -> 여기서 데이터 조립!
+            std::string vertexStr;
+            int faceVertices = 0;
 
-            // 형식: f 1/1/1 2/2/1 3/3/1
-            int matches = fscanf(file, "%d/%d/%d %d/%d/%d %d/%d/%d\n",
-                &v[0], &vt[0], &vn[0],
-                &v[1], &vt[1], &vn[1],
-                &v[2], &vt[2], &vn[2]);
+            // 한 줄에 있는 3개의 점을 읽음 (삼각형 기준)
+            while (ss >> vertexStr) {
+                unsigned int vIdx = 0, vtIdx = 0, vnIdx = 0;
 
-            if (matches != 9) {
-                printf("Face 파싱 실패! (포맷이 v/vt/vn이 아닌가요?)\n");
-                break;
+                // 슬래시(/)를 공백으로 치환하여 파싱 쉽게 만들기
+                for (char& c : vertexStr) if (c == '/') c = ' ';
+
+                std::stringstream vss(vertexStr);
+                vss >> vIdx;       // 첫 번째 숫자: 정점 인덱스
+
+                // 텍스처/노말 인덱스는 있을 수도 있고 없을 수도 있음
+                if (vertexStr.find(" ") != std::string::npos) vss >> vtIdx;
+                if (vertexStr.find(" ") != std::string::npos) vss >> vnIdx;
+
+                // --- 데이터 조립 (인덱스로 실제 값 찾기) ---
+                GLVertex vertex;
+
+                // 1. Position (필수) - OBJ는 1부터 시작하므로 -1 해줌
+                if (vIdx > 0 && (vIdx - 1) * 3 + 2 < temp_positions.size()) {
+                    vertex.x = temp_positions[(vIdx - 1) * 3 + 0];
+                    vertex.y = temp_positions[(vIdx - 1) * 3 + 1];
+                    vertex.z = temp_positions[(vIdx - 1) * 3 + 2];
+                }
+
+                // 2. UV (선택)
+                if (vtIdx > 0 && !temp_uvs.empty()) {
+                    vertex.u = temp_uvs[(vtIdx - 1) * 2 + 0];
+                    vertex.v = temp_uvs[(vtIdx - 1) * 2 + 1];
+                }
+                else { vertex.u = 0; vertex.v = 0; }
+
+                // 3. Normal (선택)
+                if (vnIdx > 0 && !temp_normals.empty()) {
+                    vertex.nx = temp_normals[(vnIdx - 1) * 3 + 0];
+                    vertex.ny = temp_normals[(vnIdx - 1) * 3 + 1];
+                    vertex.nz = temp_normals[(vnIdx - 1) * 3 + 2];
+                }
+                else { vertex.nx = 0; vertex.ny = 0; vertex.nz = 0; }
+
+                final_vertices.push_back(vertex);
+                faceVertices++;
             }
-
-            // C++ 배열은 0부터 시작하므로 -1을 해줌
-            model.faces[f_idx].v1 = v[0] - 1;
-            model.faces[f_idx].v2 = v[1] - 1;
-            model.faces[f_idx].v3 = v[2] - 1;
-
-            model.faces[f_idx].vt1 = vt[0] - 1;
-            model.faces[f_idx].vt2 = vt[1] - 1;
-            model.faces[f_idx].vt3 = vt[2] - 1;
-
-            model.faces[f_idx].n1 = vn[0] - 1;
-            model.faces[f_idx].n2 = vn[1] - 1;
-            model.faces[f_idx].n3 = vn[2] - 1;
-
-            f_idx++;
         }
-        // 주석(#)이나 다른 문자는 무시하고 줄바꿈까지 넘어가는 처리 필요
-        // (여기서는 간단하게 구현하기 위해 fscanf가 알아서 공백을 넘기도록 둠)
     }
 
-    fclose(file);
+    // std::vector -> Raw Array(포인터)로 변환
+    model.vertex_count = final_vertices.size();
+    if (model.vertex_count > 0) {
+        model.vertices = new GLVertex[model.vertex_count];
+        // 메모리 복사 (Vector의 데이터를 배열로)
+        memcpy(model.vertices, final_vertices.data(), sizeof(GLVertex) * model.vertex_count);
+
+        std::cout << "OBJ 로드 성공: " << filename << std::endl;
+        std::cout << " -> 총 정점 수(Vertices): " << model.vertex_count << std::endl;
+        std::cout << " -> 총 삼각형 수(Triangles): " << model.vertex_count / 3 << std::endl;
+    }
+    else {
+        std::cerr << "경고: 파일에서 유효한 데이터를 읽지 못했습니다." << std::endl;
+    }
+
     return model;
-}
-
-// --- 3. 메모리 해제 함수 ---
-void freeModel(Model& model) {
-    if (model.vertices) delete[] model.vertices;
-    if (model.texCoords) delete[] model.texCoords;
-    if (model.normals) delete[] model.normals;
-    if (model.faces) delete[] model.faces;
-
-    model.vertices = nullptr;
-    model.texCoords = nullptr;
-    model.normals = nullptr;
-    model.faces = nullptr;
-    model.vertex_count = 0;
-}
-
-// --- 4. Model을 Shape으로 변환하는 함수 ---
-void CreateShapeFromModel(const Model& model, float r, float g, float b) {
-    if (model.face_count == 0) return;
-
-    Shape newShape;
-    newShape.color[0] = r;
-    newShape.color[1] = g;
-    newShape.color[2] = b;
-    newShape.shapeType = 'm'; // 'm' for model
-    newShape.primitiveType = GL_TRIANGLES;
-
-    // OBJ 모델은 인덱싱되어 있지만, Shape 구조체는 플랫 배열을 사용합니다.
-    // 데이터를 "un-index"해야 합니다.
-    for (size_t i = 0; i < model.face_count; ++i) {
-        const Face& face = model.faces[i];
-
-        // Face에 있는 정점 인덱스를 사용하여 정점과 법선 데이터를 가져옵니다.
-        Vertex v[3] = { model.vertices[face.v1], model.vertices[face.v2], model.vertices[face.v3] };
-        Normal n[3] = { model.normals[face.n1], model.normals[face.n2], model.normals[face.n3] };
-
-        for (int j = 0; j < 3; ++j) {
-            newShape.vertices.push_back(v[j].x);
-            newShape.vertices.push_back(v[j].y);
-            newShape.vertices.push_back(v[j].z);
-            newShape.normals.push_back(n[j].x);
-            newShape.normals.push_back(n[j].y);
-            newShape.normals.push_back(n[j].z);
-        }
-    }
-
-    newShape.vertexCount = newShape.vertices.size() / 3;
-
-    // 모든 정점에 대해 색상 설정
-    for (int i = 0; i < newShape.vertexCount; ++i) {
-        newShape.colors.push_back(r);
-        newShape.colors.push_back(g);
-        newShape.colors.push_back(b);
-    }
-
-    setupShapeBuffers(newShape, newShape.vertices, newShape.colors, newShape.normals);
-    shapes.push_back(newShape);
 }
 
 void main(int argc, char** argv)
@@ -342,47 +284,64 @@ void main(int argc, char** argv)
     glutMotionFunc(Motion);
 
     //GenerateMap();
-    Model Map = loadObj("Map.obj");
+// 2. [로드] OBJ 파일 읽어오기
+    Model myMap = loadObj("Map_new2.obj");
 
-    if (Map.vertex_count > 0) {
-        printf("성공적으로 로드했습니다!\n");
-        printf("첫 번째 버텍스: %f %f %f\n",
-            Map.vertices[0].x, Map.vertices[0].y, Map.vertices[0].z);
-
-        // 로드된 모델을 렌더링 가능한 Shape으로 변환
-        CreateShapeFromModel(Map, 0.5f, 0.5f, 0.5f);
-
-        // [수정] OBJ의 각 면(삼각형)을 기반으로 충돌 블록 생성
-        for (size_t i = 0; i < Map.face_count; ++i) {
-            const Face& face = Map.faces[i];
-            Vertex v1 = Map.vertices[face.v1];
-            Vertex v2 = Map.vertices[face.v2];
-            Vertex v3 = Map.vertices[face.v3];
-
-            // 삼각형의 중심점을 박스 위치로 사용
-            glm::vec3 center = glm::vec3((v1.x + v2.x + v3.x) / 3.0f, (v1.y + v2.y + v3.y) / 3.0f, (v1.z + v2.z + v3.z) / 3.0f);
-
-            // 삼각형을 감싸는 AABB(축 정렬 경계 상자)의 절반 크기 계산
-            float minX = std::min({ v1.x, v2.x, v3.x });
-            float maxX = std::max({ v1.x, v2.x, v3.x });
-            float minY = std::min({ v1.y, v2.y, v3.y });
-            float maxY = std::max({ v1.y, v2.y, v3.y });
-            float minZ = std::min({ v1.z, v2.z, v3.z });
-            float maxZ = std::max({ v1.z, v2.z, v3.z });
-
-            glm::vec3 size = glm::vec3((maxX - minX) / 2.0f, (maxY - minY) / 2.0f, (maxZ - minZ) / 2.0f);
-            
-            // 두께가 거의 없는 바닥/벽을 위해 최소 두께 보장
-            if (size.x < 0.1f) size.x = 0.1f;
-            if (size.y < 0.1f) size.y = 0.1f;
-            if (size.z < 0.1f) size.z = 0.1f;
-
-            mapBlocks.push_back({ center, size });
-        }
+    if (myMap.vertex_count == 0) {
+        return; // 로드 실패 시 종료
     }
+    mapVertexCount = myMap.vertex_count;
 
-    // 사용이 끝나면 메모리 해제
-    freeModel(Map);
+    // 3. [버퍼 생성] VAO, VBO 설정
+    unsigned int VBO;
+    glGenVertexArrays(1, &mapVAO);
+    glGenBuffers(1, &VBO);
+
+    glBindVertexArray(mapVAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    // 구조체 배열을 통째로 GPU 메모리에 전송
+    glBufferData(GL_ARRAY_BUFFER, myMap.vertex_count * sizeof(GLVertex), myMap.vertices, GL_STATIC_DRAW);
+
+    // 4. [속성 연결] 셰이더에 데이터가 어떻게 들어있는지 알려줌
+    // GLVertex 구조체: { float x,y,z | float u,v | float nx,ny,nz }
+
+    // (1) 위치 (location = 0) : 3개의 float, 시작점 0
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GLVertex), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // (2) 텍스처 좌표 (location = 1) : 2개의 float, 시작점은 float 3개 뒤(12바이트)
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(GLVertex), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    // (3) 노말 (location = 2) : 3개의 float, 시작점은 float 5개 뒤(20바이트)
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(GLVertex), (void*)(5 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    // OBJ 모델의 삼각형들을 mapBlocks에 추가 (충돌 감지용)
+    for (size_t i = 0; i < myMap.vertex_count; i += 3) {
+        // 삼각형의 세 꼭짓점
+        glm::vec3 v0(myMap.vertices[i].x, myMap.vertices[i].y, myMap.vertices[i].z);
+        glm::vec3 v1(myMap.vertices[i + 1].x, myMap.vertices[i + 1].y, myMap.vertices[i + 1].z);
+        glm::vec3 v2(myMap.vertices[i + 2].x, myMap.vertices[i + 2].y, myMap.vertices[i + 2].z);
+
+        // 삼각형의 중심점을 블록의 위치로 사용
+        glm::vec3 center = (v0 + v1 + v2) / 3.0f;
+
+        // 삼각형을 감싸는 작은 AABB(축 정렬 경계 상자)의 절반 크기 계산
+        float minX = std::min({ v0.x, v1.x, v2.x });
+        float maxX = std::max({ v0.x, v1.x, v2.x });
+        float minY = std::min({ v0.y, v1.y, v2.y });
+        float maxY = std::max({ v0.y, v1.y, v2.y });
+        float minZ = std::min({ v0.z, v1.z, v2.z });
+        float maxZ = std::max({ v0.z, v1.z, v2.z });
+
+        glm::vec3 size((maxX - minX) / 2.0f, (maxY - minY) / 2.0f, (maxZ - minZ) / 2.0f);
+
+        // 충돌 감지를 위해 mapBlocks에 추가
+        mapBlocks.push_back({ center, size });
+    }
+    delete[] myMap.vertices; // 데이터 복사 후 원본 메모리 해제
 
     // 플레이어 생성
     Shape* pShape = ShapeSave(shapes, '1', 1.0f, 0.2f, 0.2f, rock.radius, rock.radius, rock.radius);
@@ -556,17 +515,18 @@ void UpdatePhysics() {
             if (collisionNormal.y > 0.707f) { // 법선이 주로 위쪽을 향할 때 (평평한 바닥)
                 rock.isGrounded = true;
                 rock.velocity.y = 0;
-                nextPos.y = blockPos.y + blockSize.y + rock.radius;
+                // nextPos.y = blockPos.y + blockSize.y + rock.radius; // 이 줄은 때때로 문제를 일으킬 수 있어, 위치 보정 로직에 맡김
             }
             else {
-                rock.velocity.x *= -0.8f;
-                rock.velocity.z *= -0.8f;
-                nextPos = rock.position;
+                // 벽에 부딪혔을 때 튕겨나가지 않고 미끄러지도록 처리
+                // rock.velocity.x *= -0.8f;
+                // rock.velocity.z *= -0.8f;
+                // nextPos = rock.position;
             }
         }
     }
 
-    if (nextPos.y < -15.0f) {
+    if (nextPos.y < -50.0f) { // 추락 시 리셋 높이 조정
         rock.position = glm::vec3(0, 5.0f, 0);
         rock.velocity = glm::vec3(0, 0, 0);
     }
@@ -638,6 +598,15 @@ GLvoid drawScene()
         pTransform = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 300.0f);
     }
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, &pTransform[0][0]);
+
+    // 맵 그리기 (OBJ)
+    if (mapVertexCount > 0) {
+        glUniform3f(glGetUniformLocation(shaderProgramID, "objectColor"), 0.5f, 0.5f, 0.5f); // 맵 색상
+        glm::mat4 model = glm::mat4(1.0f);
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
+        glBindVertexArray(mapVAO);
+        glDrawArrays(GL_TRIANGLES, 0, mapVertexCount);
+    }
 
     for (size_t i = 0; i < shapes.size(); ++i) {
         const auto& shape = shapes[i];
