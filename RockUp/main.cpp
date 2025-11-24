@@ -25,7 +25,7 @@
 // --- 게임 상태 정의 ---
 enum GameState {
     LOBBY,      // 메인 로비 (박스 안)
-    FALLING,    // 문 열리고 낙하 중 (터널 보임)
+    FALLING,    // 바닥 열리고 낙하 중 (터널 보임)
     PLAYING     // 바닥 착지 후 게임 시작 (로비/터널 사라짐)
 };
 
@@ -46,7 +46,7 @@ struct Shape {
     GLfloat initX = 0.0f, initY = 0.0f, initZ = 0.0f;
 
     char shapeType = ' ';
-    bool isDoor = false;
+    bool isDoor = false; // 바닥이 문 역할을 함
     int doorDirection = 0;
 };
 
@@ -102,14 +102,10 @@ bool isDragging = false;
 int lastMouseX = 0, lastMouseY = 0;
 float mouseSensitivity = 0.3f;
 
-float lightRadius = 50.0f;
-float lightAngle = 0.0f;
-float lightHeight = 50.0f;
-
 Player rock;
 int playerShapeIndex = -1;
 bool keyState[256] = { false };
-bool isDoorOpen = false;
+bool isDoorOpen = false; // 바닥 열림 상태
 
 // 맵 설정
 const int MAP_WIDTH = 80;
@@ -133,7 +129,7 @@ Shape* ShapeSave(std::vector<Shape>& shapeVector, char shapeKey, float r, float 
 void GenerateMap();
 void GenerateLobby();
 void UpdatePhysics();
-void ResetGame(); // 게임 리셋 함수
+void ResetGame();
 
 void main(int argc, char** argv)
 {
@@ -143,7 +139,7 @@ void main(int argc, char** argv)
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
     glutInitWindowPosition(100, 100);
     glutInitWindowSize(g_width, g_height);
-    glutCreateWindow("ROCK UP - Visual Fall & Reset");
+    glutCreateWindow("ROCK UP - Jump to Fall");
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) return;
@@ -171,14 +167,13 @@ void main(int argc, char** argv)
 // --- 리셋 함수 ---
 void ResetGame() {
     currentState = LOBBY;
-    rock.Reset(); // 플레이어 위치 초기화
-    isDoorOpen = false; // 문 닫기
+    rock.Reset();
+    isDoorOpen = false; // 바닥 닫기
 
-    // 맵 데이터 초기화
     mapShapes.clear();
     mapBlocks.clear();
 
-    // 로비 문 위치 원상복구
+    // 로비 바닥(문) 위치 원상복구
     for (auto& s : lobbyShapes) {
         if (s.isDoor) {
             s.x = s.initX;
@@ -187,7 +182,6 @@ void ResetGame() {
         }
     }
 
-    // 카메라 초기화 (선택 사항)
     cameraYaw = 270.0f;
     cameraPitch = 20.0f;
 }
@@ -196,17 +190,18 @@ void ResetGame() {
 GLvoid Keyboard(unsigned char key, int x, int y) {
     keyState[key] = true;
     if (key == 'q' || key == 'Q') exit(0);
-
-    // [추가] R 키로 리셋
-    if (key == 'r' || key == 'R') {
-        ResetGame();
-    }
+    if (key == 'r' || key == 'R') ResetGame();
 
     if (key == ' ') {
         if (rock.isGrounded) {
             float speed = sqrt(rock.velocity.x * rock.velocity.x + rock.velocity.z * rock.velocity.z);
             float bonus = speed * 1.2f;
             rock.velocity.y = rock.jumpForce + bonus;
+
+            // [수정] 로비에서 점프하면 바닥 열림 트리거 작동
+            if (currentState == LOBBY) {
+                isDoorOpen = true;
+            }
         }
     }
 }
@@ -236,24 +231,42 @@ void Motion(int x, int y) {
     }
 }
 
-// --- 로비 및 터널 생성 ---
+// --- 로비 생성 (수정됨: 바닥 갈라짐) ---
 void GenerateLobby() {
     float lobbyY = 200.0f;
     float size = 20.0f;
     float thickness = 1.0f;
 
-    // 1. 로비 본체
-    Shape* floor = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size, thickness, size);
-    floor->x = 0; floor->y = lobbyY - size; floor->z = 0;
-    lobbyBlocks.push_back({ glm::vec3(0, lobbyY - size, 0), glm::vec3(size, thickness, size) });
+    // [수정] 1. 바닥을 좌우 두 개로 분할 (문 역할)
+    // 왼쪽 바닥
+    Shape* floorL = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size / 2, thickness, size);
+    floorL->x = -size / 2; floorL->y = lobbyY - size; floorL->z = 0;
+    floorL->initX = floorL->x; floorL->initY = floorL->y; floorL->initZ = floorL->z;
+    floorL->isDoor = true;
+    floorL->doorDirection = -1;  // 왼쪽으로 이동
+    lobbyBlocks.push_back({ glm::vec3(-size / 2, lobbyY - size, 0), glm::vec3(size / 2, thickness, size) });
 
+    // 오른쪽 바닥
+    Shape* floorR = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size / 2, thickness, size);
+    floorR->x = size / 2; floorR->y = lobbyY - size; floorR->z = 0;
+    floorR->initX = floorR->x; floorR->initY = floorR->y; floorR->initZ = floorR->z;
+    floorR->isDoor = true;
+    floorR->doorDirection = 1;   // 오른쪽으로 이동
+    lobbyBlocks.push_back({ glm::vec3(size / 2, lobbyY - size, 0), glm::vec3(size / 2, thickness, size) });
+
+    // 2. 천장
     Shape* ceil = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size, thickness, size);
     ceil->x = 0; ceil->y = lobbyY + size; ceil->z = 0;
     lobbyBlocks.push_back({ glm::vec3(0, lobbyY + size, 0), glm::vec3(size, thickness, size) });
 
+    // 3. 4면 벽 (앞문 제거하고 벽으로 막음)
     Shape* back = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, size, size, thickness);
     back->x = 0; back->y = lobbyY; back->z = -size;
     lobbyBlocks.push_back({ glm::vec3(0, lobbyY, -size), glm::vec3(size, size, thickness) });
+
+    Shape* front = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, size, size, thickness);
+    front->x = 0; front->y = lobbyY; front->z = size;
+    lobbyBlocks.push_back({ glm::vec3(0, lobbyY, size), glm::vec3(size, size, thickness) });
 
     Shape* left = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, thickness, size, size);
     left->x = -size; left->y = lobbyY; left->z = 0;
@@ -263,46 +276,21 @@ void GenerateLobby() {
     right->x = size; right->y = lobbyY; right->z = 0;
     lobbyBlocks.push_back({ glm::vec3(size, lobbyY, 0), glm::vec3(thickness, size, size) });
 
-    // 앞문 (초기 위치 저장 필수)
-    Shape* doorL = ShapeSave(lobbyShapes, 'c', 0.6f, 0.3f, 0.1f, size / 2, size, thickness);
-    doorL->x = -size / 2; doorL->y = lobbyY; doorL->z = size;
-    doorL->initX = doorL->x; doorL->initY = doorL->y; doorL->initZ = doorL->z; // 초기 위치 저장
-    doorL->isDoor = true; doorL->doorDirection = -1;
-
-    Shape* doorR = ShapeSave(lobbyShapes, 'c', 0.6f, 0.3f, 0.1f, size / 2, size, thickness);
-    doorR->x = size / 2; doorR->y = lobbyY; doorR->z = size;
-    doorR->initX = doorR->x; doorR->initY = doorR->y; doorR->initZ = doorR->z; // 초기 위치 저장
-    doorR->isDoor = true; doorR->doorDirection = 1;
-
-    // 2. [부활] 낙하 터널 (Falling Shaft) - 시각 효과용
-    // 로비 바닥 밑으로 길게 뻗은 줄무늬 벽을 생성하여 떨어지는 느낌을 줌
-    float shaftHeight = 200.0f;
+    // 4. 낙하 터널 (시각 효과)
+    float shaftHeight = 230.0f;
     float segmentH = 20.0f;
-    float shaftR = size + 5.0f; // 로비보다 약간 넓게
+    float shaftR = size + 5.0f;
 
     for (float y = 0; y < shaftHeight; y += segmentH) {
-        float g = (int(y / segmentH) % 2 == 0) ? 0.2f : 0.4f; // 어두운 톤 교차
-
-        // 터널 벽은 충돌 판정(lobbyBlocks)에 넣지 않음 -> 자유 낙하 유도
-        // 혹은 필요하다면 밖으로 튀지 않게 넣을 수도 있음
-
-        // 앞
+        float g = (int(y / segmentH) % 2 == 0) ? 0.2f : 0.4f;
         Shape* w1 = ShapeSave(lobbyShapes, 'c', g, g, g, shaftR, segmentH / 2, thickness);
-        w1->x = 0; w1->y = y - 20.0f; w1->z = shaftR; // y위치 조정하여 바닥까지 닿게
-
-        // 뒤
+        w1->x = 0; w1->y = y - 20.0f; w1->z = shaftR;
         Shape* w2 = ShapeSave(lobbyShapes, 'c', g, g, g, shaftR, segmentH / 2, thickness);
         w2->x = 0; w2->y = y - 20.0f; w2->z = -shaftR;
-
-        // 좌
         Shape* w3 = ShapeSave(lobbyShapes, 'c', g - 0.1f, g - 0.1f, g - 0.1f, thickness, segmentH / 2, shaftR);
         w3->x = -shaftR; w3->y = y - 20.0f; w3->z = 0;
-
-        // 우
         Shape* w4 = ShapeSave(lobbyShapes, 'c', g - 0.1f, g - 0.1f, g - 0.1f, thickness, segmentH / 2, shaftR);
         w4->x = shaftR; w4->y = y - 20.0f; w4->z = 0;
-
-        // [중요] 터널 벽도 lobbyShapes에 포함되어 있으므로, PLAYING 상태가 되면 자동으로 사라짐
     }
 }
 
@@ -313,7 +301,6 @@ void GenerateMap() {
     s->x = 0.0f; s->y = -2.0f; s->z = 0.0f;
     mapBlocks.push_back({ glm::vec3(0, -2.0f, 0), glm::vec3(floorSize, 1.0f, floorSize) });
 
-    // 보이지 않는 충돌 벽
     float wallHeight = MAP_HEIGHT + 100.0f;
     float wallT = 10.0f;
     float offset = floorSize + wallT;
@@ -323,7 +310,6 @@ void GenerateMap() {
     mapBlocks.push_back({ glm::vec3(0, wallHeight / 2, offset), glm::vec3(floorSize, wallHeight, wallT) });
     mapBlocks.push_back({ glm::vec3(0, wallHeight / 2, -offset), glm::vec3(floorSize, wallHeight, wallT) });
 
-    // 배경 벽 (원거리)
     float bgDist = 300.0f;
     float bgSize = 400.0f;
     float bgT = 1.0f;
@@ -332,7 +318,6 @@ void GenerateMap() {
     Shape* bg3 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg3->x = 0; bg3->y = 100; bg3->z = bgDist;
     Shape* bg4 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg4->x = 0; bg4->y = 100; bg4->z = -bgDist;
 
-    // 발판
     float range = (MAP_WIDTH / 2.0f) - 5.0f;
     for (int y = 0; y < MAP_HEIGHT; ++y) {
         if (y % 2 != 0) continue;
@@ -376,26 +361,24 @@ void UpdatePhysics() {
         rock.velocity.x *= scale; rock.velocity.z *= scale;
     }
 
-    rock.velocity.y -= 0.012f; // 중력
+    rock.velocity.y -= 0.012f;
     glm::vec3 nextPos = rock.position + rock.velocity;
     rock.isGrounded = false;
 
     if (currentState == LOBBY) {
-        if (rock.position.z > 10.0f && !isDoorOpen) {
-            isDoorOpen = true;
-        }
-
+        // [수정] 바닥 열림 애니메이션
         if (isDoorOpen) {
             for (auto& s : lobbyShapes) {
                 if (s.isDoor) {
-                    s.x += s.doorDirection * 0.15f;
+                    s.x += s.doorDirection * 0.3f; // 바닥이 양옆으로 이동
                 }
             }
         }
 
-        if (nextPos.y > 175.0f) { // 로비 바닥권
+        if (nextPos.y > 175.0f) {
             for (const auto& block : lobbyBlocks) {
-                if (isDoorOpen && block.first.z > 15.0f && block.first.y > 180.0f) continue;
+                // [수정] 바닥이 열리면 바닥(y < 190 근처) 충돌 무시 -> 추락
+                if (isDoorOpen && block.first.y < 190.0f) continue;
 
                 if (CheckCollision(nextPos, rock.radius, block.first, block.second)) {
                     if (rock.position.y > block.first.y + block.second.y && rock.velocity.y < 0) {
@@ -409,13 +392,12 @@ void UpdatePhysics() {
             }
         }
         else {
-            currentState = FALLING; // 떨어지기 시작하면 FALLING 상태
+            currentState = FALLING; // 떨어짐
         }
     }
     else if (currentState == FALLING) {
-        // 낙하 중에는 터널 벽(시각적)이 보이지만, 충돌 체크는 하지 않음 (또는 필요시 추가)
         if (nextPos.y < 5.0f) {
-            currentState = PLAYING; // 바닥 도착 -> PLAYING 상태 (로비/터널 사라짐)
+            currentState = PLAYING; // 게임 시작
             GenerateMap();
             rock.velocity.y *= 0.5f;
         }
@@ -433,7 +415,6 @@ void UpdatePhysics() {
             }
         }
         if (nextPos.y < -15.0f) {
-            // 게임 중 추락 시 시작점으로 이동 (완전 초기화는 아님)
             rock.position = glm::vec3(0, 5.0f, 0); rock.velocity = glm::vec3(0, 0, 0);
         }
     }
@@ -492,15 +473,14 @@ GLvoid drawScene() {
         }
         };
 
-    drawList(shapes); // 플레이어 항상 그림
+    drawList(shapes);
 
-    // [조건부 렌더링]
     if (currentState == LOBBY || currentState == FALLING) {
-        drawList(lobbyShapes); // 로비 & 터널 그림
+        drawList(lobbyShapes);
     }
 
     if (currentState == PLAYING) {
-        drawList(mapShapes);   // 게임 맵 그림
+        drawList(mapShapes);
     }
 
     glBindVertexArray(0);
@@ -513,7 +493,6 @@ void TimerFunction(int value) {
     glutTimerFunc(16, TimerFunction, 0);
 }
 
-// --- 유틸리티 함수들 ---
 GLvoid Reshape(int w, int h) { g_width = w; g_height = h; glViewport(0, 0, w, h); }
 char* filetobuf(const char* file) {
     FILE* f = fopen(file, "rb"); if (!f) return NULL;
