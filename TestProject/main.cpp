@@ -285,7 +285,7 @@ void main(int argc, char** argv)
 
     //GenerateMap();
 // 2. [로드] OBJ 파일 읽어오기
-    Model myMap = loadObj("Map_new2.obj");
+    Model myMap = loadObj("Map_new3.obj");
 
     if (myMap.vertex_count == 0) {
         return; // 로드 실패 시 종료
