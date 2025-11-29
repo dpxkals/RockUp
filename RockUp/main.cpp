@@ -114,7 +114,7 @@ const int MAP_HEIGHT = 150;
 const int MAP_DEPTH = 80;
 
 // 맵 고정용 시드값
-unsigned int mapSeed = 777;
+unsigned int mapSeed = 123;
 
 // --- 함수 선언 ---
 void make_vertexShaders();
@@ -343,6 +343,15 @@ void GenerateMap() {
             mapBlocks.push_back({ glm::vec3(nextX, p->y, nextZ), glm::vec3(sx, 0.5f, sz) });
         }
     }
+
+    // 정상에 황금 목표 지점(Goal) 생성
+    float goalY = (MAP_HEIGHT * 3.0f) + 5.0f; // 마지막 층보다 조금 더 위에
+    Shape* goal = ShapeSave(mapShapes, 'c', 1.0f, 0.84f, 0.0f, 3.0f, 3.0f, 3.0f); // 황금색 큐브
+    goal->x = 0; goal->y = goalY; goal->z = 0;
+    goal->isDoor = true; // 편의상 isDoor 플래그를 "목표물" 표시로 재활용합니다
+
+    // 목표물도 충돌체에 등록 (밟거나 닿을 수 있게)
+    mapBlocks.push_back({ glm::vec3(0, goalY, 0), glm::vec3(3.0f, 3.0f, 3.0f) });
 }
 
 bool CheckCollision(glm::vec3 spherePos, float radius, glm::vec3 boxPos, glm::vec3 boxSize) {
@@ -414,6 +423,20 @@ void UpdatePhysics() {
     else if (currentState == PLAYING) {
         for (const auto& block : mapBlocks) {
             if (CheckCollision(nextPos, rock.radius, block.first, block.second)) {
+
+                // 황금 큐브(Goal)에 닿았는지 확인
+                // 황금 큐브는 맵의 아주 높은 곳(Y > 440)에 있고 중앙(0,0)에 있음
+                if (block.first.y > 440.0f && abs(block.first.x) < 1.0f && abs(block.first.z) < 1.0f) {
+                    currentState = CLEAR;
+
+                    // [핵심] 벽과 발판을 모두 제거하여 시야를 뻥 뚫어줌
+                    mapShapes.clear();
+                    mapBlocks.clear();
+
+                    printf("GAME CLEAR!\n");
+                    return; // 함수 즉시 종료
+                }
+
                 if (rock.position.y > block.first.y + block.second.y && rock.velocity.y < 0) {
                     rock.isGrounded = true; rock.velocity.y = 0;
                     nextPos.y = block.first.y + block.second.y + rock.radius;
@@ -424,19 +447,15 @@ void UpdatePhysics() {
             }
         }
 
-        // 정상 도달 체크
-        if (rock.position.y > 450.0f) {
-            currentState = CLEAR;
-            printf("게임 클리어! 축하합니다!\n");
-        }
-
         if (nextPos.y < -15.0f) {
             rock.position = glm::vec3(0, 5.0f, 0); rock.velocity = glm::vec3(0, 0, 0);
         }
     }
     else if (currentState == CLEAR) {
         rock.velocity = glm::vec3(0, 0, 0); // 공중 부양 (멈춤)
-        rock.position.y += 0.1f; // 천천히 승천하는 연출
+        //rock.position.y += 0.1f; // 천천히 승천하는 연출
+
+        cameraYaw += 1.0f;
     }
 
     rock.position = nextPos;
