@@ -112,6 +112,9 @@ const int MAP_WIDTH = 80;
 const int MAP_HEIGHT = 150;
 const int MAP_DEPTH = 80;
 
+// ¸Ê °íÁ¤¿ë ½Ãµå°ª
+unsigned int mapSeed = 777;
+
 // --- ÇÔ¼ö ¼±¾ð ---
 void make_vertexShaders();
 void make_fragmentShaders();
@@ -133,7 +136,10 @@ void ResetGame();
 
 void main(int argc, char** argv)
 {
-    srand((unsigned int)time(NULL));
+    // ·£´ý ½Ãµå
+    //srand((unsigned int)time(NULL));
+    // °íÁ¤ ·£´ý ½Ãµå
+    srand(mapSeed);
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
@@ -169,6 +175,8 @@ void ResetGame() {
     currentState = LOBBY;
     rock.Reset();
     isDoorOpen = false; // ¹Ù´Ú ´Ý±â
+
+    srand(mapSeed);
 
     mapShapes.clear();
     mapBlocks.clear();
@@ -237,7 +245,7 @@ void GenerateLobby() {
     float size = 20.0f;
     float thickness = 1.0f;
 
-    // [¼öÁ¤] 1. ¹Ù´ÚÀ» ÁÂ¿ì µÎ °³·Î ºÐÇÒ (¹® ¿ªÇÒ)
+    // 1. ¹Ù´ÚÀ» ÁÂ¿ì µÎ °³·Î ºÐÇÒ (¹® ¿ªÇÒ)
     // ¿ÞÂÊ ¹Ù´Ú
     Shape* floorL = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size / 2, thickness, size);
     floorL->x = -size / 2; floorL->y = lobbyY - size; floorL->z = 0;
