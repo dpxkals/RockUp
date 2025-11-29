@@ -49,6 +49,8 @@ struct Shape {
     char shapeType = ' ';
     bool isDoor = false; // 바닥이 문 역할을 함
     int doorDirection = 0;
+
+    bool isObstacle = false;
 };
 
 struct Player {
@@ -114,7 +116,7 @@ const int MAP_HEIGHT = 150;
 const int MAP_DEPTH = 80;
 
 // 맵 고정용 시드값
-unsigned int mapSeed = 123;
+unsigned int mapSeed = 327;
 
 // --- 함수 선언 ---
 void make_vertexShaders();
@@ -268,15 +270,21 @@ void GenerateLobby() {
     ceil->x = 0; ceil->y = lobbyY + size; ceil->z = 0;
     lobbyBlocks.push_back({ glm::vec3(0, lobbyY + size, 0), glm::vec3(size, thickness, size) });
 
-    // 3. 4면 벽 (앞문 제거하고 벽으로 막음)
+    // --- 3. 벽면들 ---
+    // 뒤 (Z = -size)
     Shape* back = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, size, size, thickness);
     back->x = 0; back->y = lobbyY; back->z = -size;
-    lobbyBlocks.push_back({ glm::vec3(0, lobbyY, -size), glm::vec3(size, size, thickness) });
+    back->isObstacle = true; // [추가] 사이드뷰에서 가림
 
+    // 앞 (Z = size)
     Shape* front = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, size, size, thickness);
     front->x = 0; front->y = lobbyY; front->z = size;
+    front->isObstacle = true; // [추가] 사이드뷰에서 가림
+
+    lobbyBlocks.push_back({ glm::vec3(0, lobbyY, -size), glm::vec3(size, size, thickness) });
     lobbyBlocks.push_back({ glm::vec3(0, lobbyY, size), glm::vec3(size, size, thickness) });
 
+    // 좌/우 벽은 놔둡니다 (사이드뷰의 배경이 되어줌)
     Shape* left = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, thickness, size, size);
     left->x = -size; left->y = lobbyY; left->z = 0;
     lobbyBlocks.push_back({ glm::vec3(-size, lobbyY, 0), glm::vec3(thickness, size, size) });
@@ -292,12 +300,20 @@ void GenerateLobby() {
 
     for (float y = 0; y < shaftHeight; y += segmentH) {
         float g = (int(y / segmentH) % 2 == 0) ? 0.2f : 0.4f;
+
+        // 앞뒤를 막는 벽 (Z축 방향 벽) -> 가림 처리
         Shape* w1 = ShapeSave(lobbyShapes, 'c', g, g, g, shaftR, segmentH / 2, thickness);
         w1->x = 0; w1->y = y - 20.0f; w1->z = shaftR;
+        w1->isObstacle = true; // [추가]
+
         Shape* w2 = ShapeSave(lobbyShapes, 'c', g, g, g, shaftR, segmentH / 2, thickness);
         w2->x = 0; w2->y = y - 20.0f; w2->z = -shaftR;
+        w2->isObstacle = true; // [추가]
+
+        // 좌우 벽은 놔둠
         Shape* w3 = ShapeSave(lobbyShapes, 'c', g - 0.1f, g - 0.1f, g - 0.1f, thickness, segmentH / 2, shaftR);
         w3->x = -shaftR; w3->y = y - 20.0f; w3->z = 0;
+
         Shape* w4 = ShapeSave(lobbyShapes, 'c', g - 0.1f, g - 0.1f, g - 0.1f, thickness, segmentH / 2, shaftR);
         w4->x = shaftR; w4->y = y - 20.0f; w4->z = 0;
     }
@@ -325,7 +341,9 @@ void GenerateMap() {
     Shape* bg1 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgT, bgSize, bgSize); bg1->x = bgDist; bg1->y = 100; bg1->z = 0;
     Shape* bg2 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgT, bgSize, bgSize); bg2->x = -bgDist; bg2->y = 100; bg2->z = 0;
     Shape* bg3 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg3->x = 0; bg3->y = 100; bg3->z = bgDist;
+    bg3->isObstacle = true;
     Shape* bg4 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg4->x = 0; bg4->y = 100; bg4->z = -bgDist;
+    bg4->isObstacle = true;
 
     float range = (MAP_WIDTH / 2.0f) - 5.0f;
     for (int y = 0; y < MAP_HEIGHT; ++y) {
@@ -477,55 +495,84 @@ void UpdatePhysics() {
 }
 
 GLvoid drawScene() {
-    if (currentState == CLEAR) {
-        glClearColor(1.0f, 0.84f, 0.0f, 1.0f); // 황금색 배경 (승리!)
-    }
-    else {
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f); // 기본 어두운 배경
-    }
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(shaderProgramID);
+    // 1. RenderPass에 'isMiniMap' 파라미터 추가 (기본값 false)
+    auto RenderPass = [&](glm::mat4 viewMatrix, glm::mat4 projMatrix, bool isMiniMap = false) {
 
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glFrontFace(GL_CCW);
+        // ... (셰이더 유니폼 전달 코드 동일) ...
+        unsigned int viewLoc = glGetUniformLocation(shaderProgramID, "view");
+        unsigned int projLoc = glGetUniformLocation(shaderProgramID, "projection");
+        unsigned int modelLoc = glGetUniformLocation(shaderProgramID, "model");
+        unsigned int colorLoc = glGetUniformLocation(shaderProgramID, "objectColor");
 
-    unsigned int modelLoc = glGetUniformLocation(shaderProgramID, "model");
-    unsigned int viewLoc = glGetUniformLocation(shaderProgramID, "view");
-    unsigned int projLoc = glGetUniformLocation(shaderProgramID, "projection");
+        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &viewMatrix[0][0]);
+        glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projMatrix[0][0]);
 
-    glm::vec3 lightPos(rock.position.x, rock.position.y + 50.0f, rock.position.z);
-    glUniform3f(glGetUniformLocation(shaderProgramID, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
-    glUniform3f(glGetUniformLocation(shaderProgramID, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
-    glUniform3f(glGetUniformLocation(shaderProgramID, "lightColor"), 1.0f, 1.0f, 1.0f);
+        glm::vec3 lightPos(rock.position.x, rock.position.y + 50.0f, rock.position.z);
+        glUniform3f(glGetUniformLocation(shaderProgramID, "lightPos"), lightPos.x, lightPos.y, lightPos.z);
+        glUniform3f(glGetUniformLocation(shaderProgramID, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+        glUniform3f(glGetUniformLocation(shaderProgramID, "lightColor"), 1.0f, 1.0f, 1.0f);
 
-    glm::mat4 view = glm::lookAt(cameraPos, cameraTarget, cameraUp);
-    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &view[0][0]);
+        auto drawList = [&](std::vector<Shape>& list) {
+            for (auto& s : list) {
+                // [핵심] 미니맵을 그리는 중이고 + 이 물체가 방해물(Obstacle)이라면 -> 그리지 않고 건너뜀
+                if (isMiniMap && s.isObstacle) continue;
 
-    glm::mat4 proj;
-    if (isPerspective) proj = glm::perspective(glm::radians(60.0f), (float)g_width / g_height, 0.1f, 1000.0f);
-    else { float s = 40.0f; float a = (float)g_width / g_height; proj = glm::ortho(-s * a, s * a, -s, s, 0.1f, 1000.0f); }
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, &proj[0][0]);
+                glUniform3fv(colorLoc, 1, s.color);
+                glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(s.x, s.y, s.z));
+                glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
+                glBindVertexArray(s.VAO); glDrawArrays(s.primitiveType, 0, s.vertexCount);
+            }
+            };
 
-    auto drawList = [&](std::vector<Shape>& list) {
-        for (auto& s : list) {
-            glUniform3fv(glGetUniformLocation(shaderProgramID, "objectColor"), 1, s.color);
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(s.x, s.y, s.z));
-            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
-            glBindVertexArray(s.VAO); glDrawArrays(s.primitiveType, 0, s.vertexCount);
+        drawList(shapes); // 플레이어
+
+        if (currentState == LOBBY || currentState == FALLING) {
+            drawList(lobbyShapes);
+        }
+        if (currentState == PLAYING || currentState == CLEAR) {
+            drawList(mapShapes);
         }
         };
 
-    drawList(shapes);
+    // -------------------------------------------------------
+    // [STEP 1] 메인 화면
+    // -------------------------------------------------------
+    glViewport(0, 0, g_width, g_height);
+    if (currentState == CLEAR) glClearColor(1.0f, 0.84f, 0.0f, 1.0f);
+    else glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(shaderProgramID);
+    glEnable(GL_DEPTH_TEST);
 
-    if (currentState == LOBBY || currentState == FALLING) {
-        drawList(lobbyShapes);
-    }
+    glm::mat4 mainView = glm::lookAt(cameraPos, cameraTarget, cameraUp);
+    glm::mat4 mainProj;
+    if (isPerspective) mainProj = glm::perspective(glm::radians(60.0f), (float)g_width / g_height, 0.1f, 1000.0f);
+    else { float s = 40.0f; float a = (float)g_width / g_height; mainProj = glm::ortho(-s * a, s * a, -s, s, 0.1f, 1000.0f); }
 
-    if (currentState == PLAYING) {
-        drawList(mapShapes);
-    }
+    RenderPass(mainView, mainProj, false); // false: 메인 화면이므로 다 그림
+
+    // -------------------------------------------------------
+    // [STEP 2] 미니맵
+    // -------------------------------------------------------
+    int mapW = g_width / 5;
+    int mapH = g_height / 2.5;
+    int mapX = g_width - mapW - 20;
+    int mapY = g_height - mapH - 20;
+
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(mapX, mapY, mapW, mapH);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+
+    glViewport(mapX, mapY, mapW, mapH);
+
+    glm::vec3 miniCamPos(0.0f, 225.0f, 300.0f);
+    glm::vec3 miniCamTarget(0.0f, 225.0f, 0.0f);
+    glm::mat4 miniView = glm::lookAt(miniCamPos, miniCamTarget, glm::vec3(0, 1, 0));
+    glm::mat4 miniProj = glm::ortho(-60.0f, 60.0f, -20.0f, 500.0f, 0.1f, 1000.0f);
+
+    RenderPass(miniView, miniProj, true); // true: 미니맵이므로 벽은 투명 처리!
 
     glBindVertexArray(0);
     glutSwapBuffers();
