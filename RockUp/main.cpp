@@ -495,10 +495,9 @@ void UpdatePhysics() {
 }
 
 GLvoid drawScene() {
-    // 1. RenderPass에 'isMiniMap' 파라미터 추가 (기본값 false)
+    // 1. 그리기 로직 (RenderPass)
     auto RenderPass = [&](glm::mat4 viewMatrix, glm::mat4 projMatrix, bool isMiniMap = false) {
 
-        // ... (셰이더 유니폼 전달 코드 동일) ...
         unsigned int viewLoc = glGetUniformLocation(shaderProgramID, "view");
         unsigned int projLoc = glGetUniformLocation(shaderProgramID, "projection");
         unsigned int modelLoc = glGetUniformLocation(shaderProgramID, "model");
@@ -514,7 +513,7 @@ GLvoid drawScene() {
 
         auto drawList = [&](std::vector<Shape>& list) {
             for (auto& s : list) {
-                // [핵심] 미니맵을 그리는 중이고 + 이 물체가 방해물(Obstacle)이라면 -> 그리지 않고 건너뜀
+                // 미니맵일 때 방해물(앞쪽 벽)은 그리지 않음
                 if (isMiniMap && s.isObstacle) continue;
 
                 glUniform3fv(colorLoc, 1, s.color);
@@ -524,7 +523,9 @@ GLvoid drawScene() {
             }
             };
 
-        drawList(shapes); // 플레이어
+        // [플레이어 그리기] 
+        // 미니맵에서도 플레이어(빨간 공)가 그려집니다.
+        drawList(shapes);
 
         if (currentState == LOBBY || currentState == FALLING) {
             drawList(lobbyShapes);
@@ -540,6 +541,7 @@ GLvoid drawScene() {
     glViewport(0, 0, g_width, g_height);
     if (currentState == CLEAR) glClearColor(1.0f, 0.84f, 0.0f, 1.0f);
     else glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(shaderProgramID);
     glEnable(GL_DEPTH_TEST);
@@ -549,10 +551,10 @@ GLvoid drawScene() {
     if (isPerspective) mainProj = glm::perspective(glm::radians(60.0f), (float)g_width / g_height, 0.1f, 1000.0f);
     else { float s = 40.0f; float a = (float)g_width / g_height; mainProj = glm::ortho(-s * a, s * a, -s, s, 0.1f, 1000.0f); }
 
-    RenderPass(mainView, mainProj, false); // false: 메인 화면이므로 다 그림
+    RenderPass(mainView, mainProj, false);
 
     // -------------------------------------------------------
-    // [STEP 2] 미니맵
+    // [STEP 2] 미니맵 (수정됨)
     // -------------------------------------------------------
     int mapW = g_width / 5;
     int mapH = g_height / 2.5;
@@ -561,7 +563,11 @@ GLvoid drawScene() {
 
     glEnable(GL_SCISSOR_TEST);
     glScissor(mapX, mapY, mapW, mapH);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+    // [수정 1] 배경색을 밝은 회색(거의 흰색)으로 변경 -> 식별력 UP
+    glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
+
+    // Depth 버퍼도 같이 지워줘야 플레이어가 배경 위에 제대로 그려짐
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_SCISSOR_TEST);
 
@@ -570,9 +576,12 @@ GLvoid drawScene() {
     glm::vec3 miniCamPos(0.0f, 225.0f, 300.0f);
     glm::vec3 miniCamTarget(0.0f, 225.0f, 0.0f);
     glm::mat4 miniView = glm::lookAt(miniCamPos, miniCamTarget, glm::vec3(0, 1, 0));
-    glm::mat4 miniProj = glm::ortho(-60.0f, 60.0f, -20.0f, 500.0f, 0.1f, 1000.0f);
 
-    RenderPass(miniView, miniProj, true); // true: 미니맵이므로 벽은 투명 처리!
+    // [수정 2] 좌우 폭을 -60~60에서 -45~45로 좁힘 -> 맵이 더 꽉 차 보임
+    // 맵의 실제 폭이 약 80(-40~40)이므로, 여유분 조금 둬서 90(-45~45)으로 설정
+    glm::mat4 miniProj = glm::ortho(-45.0f, 45.0f, -20.0f, 500.0f, 0.1f, 1000.0f);
+
+    RenderPass(miniView, miniProj, true);
 
     glBindVertexArray(0);
     glutSwapBuffers();
