@@ -511,27 +511,33 @@ GLvoid drawScene() {
         glUniform3f(glGetUniformLocation(shaderProgramID, "viewPos"), cameraPos.x, cameraPos.y, cameraPos.z);
         glUniform3f(glGetUniformLocation(shaderProgramID, "lightColor"), 1.0f, 1.0f, 1.0f);
 
-        auto drawList = [&](std::vector<Shape>& list) {
+        auto drawList = [&](std::vector<Shape>& list, bool isPlayer = false) {
             for (auto& s : list) {
                 // 미니맵일 때 방해물(앞쪽 벽)은 그리지 않음
                 if (isMiniMap && s.isObstacle) continue;
 
                 glUniform3fv(colorLoc, 1, s.color);
+
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(s.x, s.y, s.z));
+
+                // [수정 1] 플레이어 크기를 15배로 키움 (이제 빨간 점으로 확실히 보임)
+                if (isMiniMap && isPlayer) {
+                    model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f));
+                }
+
                 glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
                 glBindVertexArray(s.VAO); glDrawArrays(s.primitiveType, 0, s.vertexCount);
             }
             };
 
-        // [플레이어 그리기] 
-        // 미니맵에서도 플레이어(빨간 공)가 그려집니다.
-        drawList(shapes);
+        // 플레이어 그리기
+        drawList(shapes, true);
 
         if (currentState == LOBBY || currentState == FALLING) {
-            drawList(lobbyShapes);
+            drawList(lobbyShapes, false);
         }
         if (currentState == PLAYING || currentState == CLEAR) {
-            drawList(mapShapes);
+            drawList(mapShapes, false);
         }
         };
 
@@ -556,32 +562,34 @@ GLvoid drawScene() {
     // -------------------------------------------------------
     // [STEP 2] 미니맵 (수정됨)
     // -------------------------------------------------------
-    int mapW = g_width / 5;
-    int mapH = g_height / 2.5;
-    int mapX = g_width - mapW - 20;
-    int mapY = g_height - mapH - 20;
+    if (currentState == PLAYING || currentState == CLEAR) {
 
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(mapX, mapY, mapW, mapH);
+        int mapW = g_width / 5;
+        int mapH = g_height / 2.5;
+        int mapX = g_width - mapW - 20;
+        int mapY = g_height - mapH - 20;
 
-    // [수정 1] 배경색을 밝은 회색(거의 흰색)으로 변경 -> 식별력 UP
-    glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(mapX, mapY, mapW, mapH);
+        glClearColor(0.9f, 0.9f, 0.9f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
 
-    // Depth 버퍼도 같이 지워줘야 플레이어가 배경 위에 제대로 그려짐
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glDisable(GL_SCISSOR_TEST);
+        glViewport(mapX, mapY, mapW, mapH);
 
-    glViewport(mapX, mapY, mapW, mapH);
+        // [수정 2] 카메라 위치를 바닥(Y=0)으로 내림
+        // 이제 "바닥에서부터 위를 훑어보는" 기준이 됨
+        glm::vec3 miniCamPos(0.0f, 0.0f, 300.0f);
+        glm::vec3 miniCamTarget(0.0f, 0.0f, 0.0f);
+        glm::mat4 miniView = glm::lookAt(miniCamPos, miniCamTarget, glm::vec3(0, 1, 0));
 
-    glm::vec3 miniCamPos(0.0f, 225.0f, 300.0f);
-    glm::vec3 miniCamTarget(0.0f, 225.0f, 0.0f);
-    glm::mat4 miniView = glm::lookAt(miniCamPos, miniCamTarget, glm::vec3(0, 1, 0));
+        // [수정 3] 보여주는 높이 범위를 바닥(-20) ~ 꼭대기(470)으로 딱 맞춤
+        // Goal 높이가 약 455 정도이므로 470까지 잡으면 꼭대기에 딱 붙음
+        float topY = (MAP_HEIGHT * 3.0f) + 20.0f;
+        glm::mat4 miniProj = glm::ortho(-50.0f, 50.0f, -20.0f, topY, 0.1f, 1000.0f);
 
-    // [수정 2] 좌우 폭을 -60~60에서 -45~45로 좁힘 -> 맵이 더 꽉 차 보임
-    // 맵의 실제 폭이 약 80(-40~40)이므로, 여유분 조금 둬서 90(-45~45)으로 설정
-    glm::mat4 miniProj = glm::ortho(-45.0f, 45.0f, -20.0f, 500.0f, 0.1f, 1000.0f);
-
-    RenderPass(miniView, miniProj, true);
+        RenderPass(miniView, miniProj, true);
+    }
 
     glBindVertexArray(0);
     glutSwapBuffers();
