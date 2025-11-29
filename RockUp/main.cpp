@@ -26,7 +26,8 @@
 enum GameState {
     LOBBY,      // 메인 로비 (박스 안)
     FALLING,    // 바닥 열리고 낙하 중 (터널 보임)
-    PLAYING     // 바닥 착지 후 게임 시작 (로비/터널 사라짐)
+    PLAYING,    // 바닥 착지 후 게임 시작 (로비/터널 사라짐)
+    CLEAR       // 게임 클리어
 };
 
 GameState currentState = LOBBY;
@@ -422,9 +423,20 @@ void UpdatePhysics() {
                 }
             }
         }
+
+        // 정상 도달 체크
+        if (rock.position.y > 450.0f) {
+            currentState = CLEAR;
+            printf("게임 클리어! 축하합니다!\n");
+        }
+
         if (nextPos.y < -15.0f) {
             rock.position = glm::vec3(0, 5.0f, 0); rock.velocity = glm::vec3(0, 0, 0);
         }
+    }
+    else if (currentState == CLEAR) {
+        rock.velocity = glm::vec3(0, 0, 0); // 공중 부양 (멈춤)
+        rock.position.y += 0.1f; // 천천히 승천하는 연출
     }
 
     rock.position = nextPos;
@@ -446,7 +458,12 @@ void UpdatePhysics() {
 }
 
 GLvoid drawScene() {
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    if (currentState == CLEAR) {
+        glClearColor(1.0f, 0.84f, 0.0f, 1.0f); // 황금색 배경 (승리!)
+    }
+    else {
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f); // 기본 어두운 배경
+    }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(shaderProgramID);
 
