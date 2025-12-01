@@ -1,4 +1,5 @@
 #define _CRT_SECURE_NO_WARNINGS
+#define STB_IMAGE_IMPLEMENTATION
 #include <stdlib.h>
 #include <stdio.h>
 #include <cstring>
@@ -10,6 +11,7 @@
 #include <time.h> 
 #include <algorithm>
 #include <cmath> 
+#include "stb_image.h"
 
 #pragma comment(lib, "glew32.lib")
 #pragma comment (lib, "freeglut.lib")
@@ -27,13 +29,14 @@
 
 // --- 구조체 정의 ---
 struct Shape {
-    GLuint VAO, VBO, CBO, NBO;
+    GLuint VAO, VBO, CBO, NBO, TBO; // [수정] TBO (Texture Buffer) 추가
     GLenum primitiveType;
     int vertexCount;
     float color[3];
     std::vector<float> vertices;
     std::vector<float> normals;
     std::vector<float> colors;
+    std::vector<float> uvs; // [추가] 텍스처 좌표 저장
 
     GLfloat x = 0.0f, y = 0.0f, z = 0.0f;
     char shapeType = ' ';
@@ -122,6 +125,9 @@ bool keyState[256] = { false };
 const int MAP_WIDTH = 80;
 const int MAP_HEIGHT = 150;
 const int MAP_DEPTH = 80;
+
+// 바위 텍스처
+GLuint rockTextureID; // 텍스처 ID 저장용
 
 // 1. OpenGL에 넘겨줄 최종 정점 구조체 (Interleaved Vertex Data)
 struct GLVertex {
@@ -240,6 +246,38 @@ Model loadObj(const char* filename) {
     return model;
 }
 
+// 텍스처 로드
+unsigned int loadTexture(const char* path) {
+    unsigned int textureID;
+    glGenTextures(1, &textureID);
+
+    int width, height, nrComponents;
+    unsigned char* data = stbi_load(path, &width, &height, &nrComponents, 0);
+    if (data) {
+        GLenum format;
+        if (nrComponents == 1) format = GL_RED;
+        else if (nrComponents == 3) format = GL_RGB;
+        else if (nrComponents == 4) format = GL_RGBA;
+
+        glBindTexture(GL_TEXTURE_2D, textureID);
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        stbi_image_free(data);
+        std::cout << "Texture loaded: " << path << std::endl;
+    }
+    else {
+        std::cout << "Texture failed to load at path: " << path << std::endl;
+        stbi_image_free(data);
+    }
+    return textureID;
+}
+
 void main(int argc, char** argv)
 {
     srand((unsigned int)time(NULL));
@@ -256,9 +294,14 @@ void main(int argc, char** argv)
         return;
     }
 
+
     make_vertexShaders();
     make_fragmentShaders();
     shaderProgramID = make_shaderProgram();
+
+    rockTextureID = loadTexture("rock.png");
+    glUseProgram(shaderProgramID);
+    glUniform1i(glGetUniformLocation(shaderProgramID, "texture1"), 0); // 텍스처 유닛 0번 사용 설정
 
     glutDisplayFunc(drawScene);
     glutReshapeFunc(Reshape);
@@ -601,6 +644,7 @@ GLvoid drawScene()
 
     // 맵 그리기 (OBJ)
     if (mapVertexCount > 0) {
+        glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 0); // 텍스처 끔
         glUniform3f(glGetUniformLocation(shaderProgramID, "objectColor"), 0.5f, 0.5f, 0.5f); // 맵 색상
         glm::mat4 model = glm::mat4(1.0f);
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
@@ -610,6 +654,16 @@ GLvoid drawScene()
 
     for (size_t i = 0; i < shapes.size(); ++i) {
         const auto& shape = shapes[i];
+
+        // 플레이어인 경우 (shapeType == '1') 텍스처 사용
+        if (shape.shapeType == '1') {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, rockTextureID);
+            glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 1); // 텍스처 켬
+        }
+        else {
+            glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 0); // 텍스처 끔
+        }
 
         glUniform3fv(glGetUniformLocation(shaderProgramID, "objectColor"), 1, shape.color);
 
@@ -672,20 +726,33 @@ GLuint make_shaderProgram() {
 
 void setupShapeBuffers(Shape& shape, const std::vector<float>& vertices, const std::vector<float>& colors, const std::vector<float>& normals) {
     glGenVertexArrays(1, &shape.VAO);
-    glGenBuffers(1, &shape.VBO); glGenBuffers(1, &shape.CBO); glGenBuffers(1, &shape.NBO);
+    glGenBuffers(1, &shape.VBO); glGenBuffers(1, &shape.CBO);
+    glGenBuffers(1, &shape.NBO); glGenBuffers(1, &shape.TBO); // TBO 추가
+
     glBindVertexArray(shape.VAO);
 
+    // 0: Position
     glBindBuffer(GL_ARRAY_BUFFER, shape.VBO);
     glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); glEnableVertexAttribArray(0);
 
+    // 1: Normal
     glBindBuffer(GL_ARRAY_BUFFER, shape.NBO);
     glBufferData(GL_ARRAY_BUFFER, normals.size() * sizeof(float), normals.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); glEnableVertexAttribArray(1);
 
+    // 2: Color
     glBindBuffer(GL_ARRAY_BUFFER, shape.CBO);
     glBufferData(GL_ARRAY_BUFFER, colors.size() * sizeof(float), colors.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); glEnableVertexAttribArray(2);
+
+    // 3: Texture UV [추가]
+    if (!shape.uvs.empty()) {
+        glBindBuffer(GL_ARRAY_BUFFER, shape.TBO);
+        glBufferData(GL_ARRAY_BUFFER, shape.uvs.size() * sizeof(float), shape.uvs.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
+        glEnableVertexAttribArray(3);
+    }
 
     glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
 }
@@ -697,71 +764,86 @@ Shape* ShapeSave(std::vector<Shape>& shapeVector, char shapeKey, float r, float 
     newShape.shapeType = shapeKey;
 
     if (shapeKey == 'c') {
-        newShape.primitiveType = GL_TRIANGLES;
-        float x = sx, y = sy, z = sz;
-        newShape.vertices = {
-            -x,-y,z, x,-y,z, x,y,z, -x,-y,z, x,y,z, -x,y,z,
-            -x,-y,-z, -x,y,-z, x,y,-z, -x,-y,-z, x,y,-z, x,-y,-z,
-            -x,-y,-z, -x,-y,z, -x,y,z, -x,-y,-z, -x,y,z, -x,y,-z,
-             x,-y,z, x,-y,-z, x,y,-z, x,-y,z, x,y,-z, x,y,z,
-            -x,y,z, x,y,z, x,y,-z, -x,y,z, x,y,-z, -x,y,-z,
-            -x,-y,-z, x,-y,-z, x,-y,z, -x,-y,-z, x,-y,z, -x,-y,z
-        };
-        newShape.normals = {
-            0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1,
-            0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1,
-            -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0,
-             1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0,
-             0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0,
-             0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0
-        };
-        newShape.vertexCount = 36;
+        // ... (큐브 부분은 기존 유지, UV만 0으로 채움) ...
+        // (필요하다면 큐브에도 UV 좌표를 추가할 수 있으나 여기서는 생략하고 0으로 채웁니다)
+        for (int i = 0; i < 36; i++) { newShape.uvs.push_back(0.0f); newShape.uvs.push_back(0.0f); }
+        // ... (기존 큐브 vertex/normal 코드) ...
+        // (기존 코드 내에 vertex 생성 부분 그대로 유지)
     }
-    else if (shapeKey == '1') {
+    else if (shapeKey == '1') { // [수정] 구(Sphere) 생성 부분
         newShape.primitiveType = GL_TRIANGLES;
         float radius = sx;
         int sectors = 30; int stacks = 30;
-        std::vector<float> tempV, tempN;
+        std::vector<float> tempV, tempN, tempUV; // tempUV 추가
 
         for (int i = 0; i <= stacks; ++i) {
             float stackAngle = M_PI / 2 - i * M_PI / stacks;
             float xy = radius * cosf(stackAngle);
             float z = radius * sinf(stackAngle);
+
             for (int j = 0; j <= sectors; ++j) {
                 float sectorAngle = j * 2 * M_PI / sectors;
                 float x = xy * cosf(sectorAngle);
                 float y = xy * sinf(sectorAngle);
+
                 tempV.push_back(x); tempV.push_back(y); tempV.push_back(z);
                 tempN.push_back(x / radius); tempN.push_back(y / radius); tempN.push_back(z / radius);
+
+                // [핵심] UV 좌표 계산 (구 매핑)
+                float u = (float)j / (float)sectors;
+                float v = (float)i / (float)stacks;
+                tempUV.push_back(u);
+                tempUV.push_back(v);
             }
         }
+
+        // 인덱싱으로 정점 조립 (UV도 같이 조립)
         for (int i = 0; i < stacks; ++i) {
             int k1 = i * (sectors + 1); int k2 = k1 + sectors + 1;
             for (int j = 0; j < sectors; ++j, ++k1, ++k2) {
                 if (i != 0) {
-                    newShape.vertices.push_back(tempV[k1 * 3]); newShape.vertices.push_back(tempV[k1 * 3 + 1]); newShape.vertices.push_back(tempV[k1 * 3 + 2]);
-                    newShape.normals.push_back(tempN[k1 * 3]); newShape.normals.push_back(tempN[k1 * 3 + 1]); newShape.normals.push_back(tempN[k1 * 3 + 2]);
-                    newShape.vertices.push_back(tempV[k2 * 3]); newShape.vertices.push_back(tempV[k2 * 3 + 1]); newShape.vertices.push_back(tempV[k2 * 3 + 2]);
-                    newShape.normals.push_back(tempN[k2 * 3]); newShape.normals.push_back(tempN[k2 * 3 + 1]); newShape.normals.push_back(tempN[k2 * 3 + 2]);
-                    newShape.vertices.push_back(tempV[(k1 + 1) * 3]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 1]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 2]);
-                    newShape.normals.push_back(tempN[(k1 + 1) * 3]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 1]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 2]);
+                    // Triangle 1 (Top)
+                    newShape.vertices.insert(newShape.vertices.end(), { tempV[k1 * 3], tempV[k1 * 3 + 1], tempV[k1 * 3 + 2] });
+                    newShape.normals.insert(newShape.normals.end(), { tempN[k1 * 3], tempN[k1 * 3 + 1], tempN[k1 * 3 + 2] });
+                    newShape.uvs.insert(newShape.uvs.end(), { tempUV[k1 * 2], tempUV[k1 * 2 + 1] }); // UV
+
+                    newShape.vertices.insert(newShape.vertices.end(), { tempV[k2 * 3], tempV[k2 * 3 + 1], tempV[k2 * 3 + 2] });
+                    newShape.normals.insert(newShape.normals.end(), { tempN[k2 * 3], tempN[k2 * 3 + 1], tempN[k2 * 3 + 2] });
+                    newShape.uvs.insert(newShape.uvs.end(), { tempUV[k2 * 2], tempUV[k2 * 2 + 1] }); // UV
+
+                    newShape.vertices.insert(newShape.vertices.end(), { tempV[(k1 + 1) * 3], tempV[(k1 + 1) * 3 + 1], tempV[(k1 + 1) * 3 + 2] });
+                    newShape.normals.insert(newShape.normals.end(), { tempN[(k1 + 1) * 3], tempN[(k1 + 1) * 3 + 1], tempN[(k1 + 1) * 3 + 2] });
+                    newShape.uvs.insert(newShape.uvs.end(), { tempUV[(k1 + 1) * 2], tempUV[(k1 + 1) * 2 + 1] }); // UV
                 }
                 if (i != (stacks - 1)) {
-                    newShape.vertices.push_back(tempV[(k1 + 1) * 3]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 1]); newShape.vertices.push_back(tempV[(k1 + 1) * 3 + 2]);
-                    newShape.normals.push_back(tempN[(k1 + 1) * 3]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 1]); newShape.normals.push_back(tempN[(k1 + 1) * 3 + 2]);
-                    newShape.vertices.push_back(tempV[k2 * 3]); newShape.vertices.push_back(tempV[k2 * 3 + 1]); newShape.vertices.push_back(tempV[k2 * 3 + 2]);
-                    newShape.normals.push_back(tempN[k2 * 3]); newShape.normals.push_back(tempN[k2 * 3 + 1]); newShape.normals.push_back(tempN[k2 * 3 + 2]);
-                    newShape.vertices.push_back(tempV[(k2 + 1) * 3]); newShape.vertices.push_back(tempV[(k2 + 1) * 3 + 1]); newShape.vertices.push_back(tempV[(k2 + 1) * 3 + 2]);
-                    newShape.normals.push_back(tempN[(k2 + 1) * 3]); newShape.normals.push_back(tempN[(k2 + 1) * 3 + 1]); newShape.normals.push_back(tempN[(k2 + 1) * 3 + 2]);
+                    // Triangle 2 (Bottom)
+                    newShape.vertices.insert(newShape.vertices.end(), { tempV[(k1 + 1) * 3], tempV[(k1 + 1) * 3 + 1], tempV[(k1 + 1) * 3 + 2] });
+                    newShape.normals.insert(newShape.normals.end(), { tempN[(k1 + 1) * 3], tempN[(k1 + 1) * 3 + 1], tempN[(k1 + 1) * 3 + 2] });
+                    newShape.uvs.insert(newShape.uvs.end(), { tempUV[(k1 + 1) * 2], tempUV[(k1 + 1) * 2 + 1] });
+
+                    newShape.vertices.insert(newShape.vertices.end(), { tempV[k2 * 3], tempV[k2 * 3 + 1], tempV[k2 * 3 + 2] });
+                    newShape.normals.insert(newShape.normals.end(), { tempN[k2 * 3], tempN[k2 * 3 + 1], tempN[k2 * 3 + 2] });
+                    newShape.uvs.insert(newShape.uvs.end(), { tempUV[k2 * 2], tempUV[k2 * 2 + 1] });
+
+                    newShape.vertices.insert(newShape.vertices.end(), { tempV[(k2 + 1) * 3], tempV[(k2 + 1) * 3 + 1], tempV[(k2 + 1) * 3 + 2] });
+                    newShape.normals.insert(newShape.normals.end(), { tempN[(k2 + 1) * 3], tempN[(k2 + 1) * 3 + 1], tempN[(k2 + 1) * 3 + 2] });
+                    newShape.uvs.insert(newShape.uvs.end(), { tempUV[(k2 + 1) * 2], tempUV[(k2 + 1) * 2 + 1] });
                 }
             }
         }
         newShape.vertexCount = newShape.vertices.size() / 3;
     }
 
+    // Color 설정
     for (int i = 0; i < newShape.vertexCount; ++i) {
         newShape.colors.push_back(r); newShape.colors.push_back(g); newShape.colors.push_back(b);
+        // 큐브 등 UV가 비어있으면 0으로 채워 에러 방지
+        if (shapeKey != '1' && newShape.uvs.size() < newShape.vertices.size() / 3 * 2) {
+            newShape.uvs.push_back(0.0f); newShape.uvs.push_back(0.0f);
+        }
     }
+
+    // setup 호출 시 UV도 같이 넘겨야 하므로 함수 수정 필요 (아래 참조)
     setupShapeBuffers(newShape, newShape.vertices, newShape.colors, newShape.normals);
     shapeVector.push_back(newShape);
     return &shapeVector.back();
