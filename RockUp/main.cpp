@@ -380,7 +380,9 @@ void GenerateMap() {
     float bgSize = 400.0f;
     float bgT = 1.0f;
     Shape* bg1 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgT, bgSize, bgSize); bg1->x = bgDist; bg1->y = 100; bg1->z = 0;
+    bg1->isObstacle = true;
     Shape* bg2 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgT, bgSize, bgSize); bg2->x = -bgDist; bg2->y = 100; bg2->z = 0;
+    bg2->isObstacle = true;
     Shape* bg3 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg3->x = 0; bg3->y = 100; bg3->z = bgDist;
     bg3->isObstacle = true;
     Shape* bg4 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg4->x = 0; bg4->y = 100; bg4->z = -bgDist;
@@ -608,7 +610,7 @@ GLvoid drawScene() {
     RenderPass(mainView, mainProj, false);
 
     // -------------------------------------------------------
-    // [STEP 2] 미니맵 (수정됨)
+    // [STEP 2] 미니맵 (회전 적용)
     // -------------------------------------------------------
     if (currentState == PLAYING || currentState == CLEAR) {
 
@@ -624,19 +626,29 @@ GLvoid drawScene() {
         glDisable(GL_SCISSOR_TEST);
 
         glViewport(mapX, mapY, mapW, mapH);
+        glDisable(GL_CULL_FACE);
 
-        // [수정 2] 카메라 위치를 바닥(Y=0)으로 내림
-        // 이제 "바닥에서부터 위를 훑어보는" 기준이 됨
-        glm::vec3 miniCamPos(0.0f, 0.0f, 300.0f);
-        glm::vec3 miniCamTarget(0.0f, 0.0f, 0.0f);
+        // [핵심 수정] 카메라 위치를 플레이어의 회전각(cameraYaw)에 맞춰서 계산
+        float dist = 800.0f; // 타워 중심에서 떨어진 거리
+        float rad = glm::radians(cameraYaw); // 현재 카메라 각도 (라디안)
+
+        // cos, sin을 이용해 원형으로 카메라 위치 결정
+        // (cameraYaw는 보통 -90도에서 시작하므로 좌표계에 맞춰서 sin/cos 조정)
+        // 메인 카메라 공식과 비슷하게 따라가되, 높이는 중앙(250) 고정
+        float camX = cos(rad) * dist;
+        float camZ = sin(rad) * dist;
+
+        glm::vec3 miniCamPos(camX, 250.0f, camZ);
+        glm::vec3 miniCamTarget(0.0f, 250.0f, 0.0f); // 타워의 허리춤을 바라봄
         glm::mat4 miniView = glm::lookAt(miniCamPos, miniCamTarget, glm::vec3(0, 1, 0));
 
-        // [수정 3] 보여주는 높이 범위를 바닥(-20) ~ 꼭대기(470)으로 딱 맞춤
-        // Goal 높이가 약 455 정도이므로 470까지 잡으면 꼭대기에 딱 붙음
-        float topY = (MAP_HEIGHT * 3.0f) + 20.0f;
-        glm::mat4 miniProj = glm::ortho(-50.0f, 50.0f, -20.0f, topY, 0.1f, 1000.0f);
+        // 맵 전체 높이를 커버하는 투영
+        // Y축 중심이 250이므로, 위아래로 300씩 잡으면 0~550 커버 가능
+        glm::mat4 miniProj = glm::ortho(-70.0f, 70.0f, -300.0f, 300.0f, 0.1f, 2000.0f);
 
         RenderPass(miniView, miniProj, true);
+
+        glEnable(GL_CULL_FACE);
     }
 
     glBindVertexArray(0);
