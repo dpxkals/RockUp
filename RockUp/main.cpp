@@ -7,6 +7,8 @@
 #include <time.h> 
 #include <algorithm>
 #include <cmath> 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h" // stb_image 라이브러리 필요
 
 #pragma comment(lib, "glew32.lib")
 #pragma comment (lib, "freeglut.lib")
@@ -34,13 +36,14 @@ GameState currentState = LOBBY;
 
 // --- 구조체 정의 ---
 struct Shape {
-    GLuint VAO, VBO, CBO, NBO;
+    GLuint VAO, VBO, CBO, NBO, TBO; // [수정] TBO (Texture Buffer) 추가
     GLenum primitiveType;
     int vertexCount;
     float color[3];
     std::vector<float> vertices;
     std::vector<float> normals;
     std::vector<float> colors;
+    std::vector<float> uvs; // [추가] 텍스처 좌표 저장
 
     GLfloat x = 0.0f, y = 0.0f, z = 0.0f;
     // 초기 위치 저장용 (리셋 시 사용)
@@ -118,6 +121,8 @@ const int MAP_DEPTH = 80;
 // 맵 고정용 시드값
 unsigned int mapSeed = 327;
 
+GLuint rockTextureID; // 텍스처 ID 저장용
+
 // --- 함수 선언 ---
 void make_vertexShaders();
 void make_fragmentShaders();
@@ -136,6 +141,37 @@ void GenerateMap();
 void GenerateLobby();
 void UpdatePhysics();
 void ResetGame();
+
+unsigned int loadTexture(const char* path) {
+    unsigned int textureID;
+    glGenTextures(1, &textureID);
+
+    int width, height, nrComponents;
+    unsigned char* data = stbi_load(path, &width, &height, &nrComponents, 0);
+    if (data) {
+        GLenum format;
+        if (nrComponents == 1) format = GL_RED;
+        else if (nrComponents == 3) format = GL_RGB;
+        else if (nrComponents == 4) format = GL_RGBA;
+
+        glBindTexture(GL_TEXTURE_2D, textureID);
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        stbi_image_free(data);
+        printf("Texture loaded: %s\n", path);
+    }
+    else {
+        printf("Texture failed to load at path: %s\n", path);
+        stbi_image_free(data);
+    }
+    return textureID;
+}
 
 void main(int argc, char** argv)
 {
@@ -156,6 +192,11 @@ void main(int argc, char** argv)
     make_vertexShaders();
     make_fragmentShaders();
     shaderProgramID = make_shaderProgram();
+
+    // [추가] 텍스처 로드 및 유닛 설정
+    rockTextureID = loadTexture("rock.png");
+    glUseProgram(shaderProgramID);
+    glUniform1i(glGetUniformLocation(shaderProgramID, "texture1"), 0); // 텍스처 유닛 0번
 
     glutDisplayFunc(drawScene);
     glutReshapeFunc(Reshape);
@@ -513,14 +554,21 @@ GLvoid drawScene() {
 
         auto drawList = [&](std::vector<Shape>& list, bool isPlayer = false) {
             for (auto& s : list) {
-                // 미니맵일 때 방해물(앞쪽 벽)은 그리지 않음
                 if (isMiniMap && s.isObstacle) continue;
 
                 glUniform3fv(colorLoc, 1, s.color);
 
-                glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(s.x, s.y, s.z));
+                // [추가] 플레이어(구)일 때만 텍스처 사용
+                if (isPlayer && s.shapeType == '1') {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, rockTextureID);
+                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 1); // 텍스처 ON
+                }
+                else {
+                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 0); // 텍스처 OFF
+                }
 
-                // [수정 1] 플레이어 크기를 15배로 키움 (이제 빨간 점으로 확실히 보임)
+                glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(s.x, s.y, s.z));
                 if (isMiniMap && isPlayer) {
                     model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f));
                 }
@@ -620,38 +668,80 @@ GLuint make_shaderProgram() {
     glLinkProgram(id); glDeleteShader(vertexShader); glDeleteShader(fragmentShader); return id;
 }
 void setupShapeBuffers(Shape& s, const std::vector<float>& v, const std::vector<float>& c, const std::vector<float>& n) {
-    glGenVertexArrays(1, &s.VAO); glGenBuffers(1, &s.VBO); glGenBuffers(1, &s.CBO); glGenBuffers(1, &s.NBO);
+    glGenVertexArrays(1, &s.VAO);
+    glGenBuffers(1, &s.VBO); glGenBuffers(1, &s.CBO); glGenBuffers(1, &s.NBO);
+    glGenBuffers(1, &s.TBO); // [추가]
+
     glBindVertexArray(s.VAO);
+
     glBindBuffer(GL_ARRAY_BUFFER, s.VBO); glBufferData(GL_ARRAY_BUFFER, v.size() * 4, v.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0); glEnableVertexAttribArray(0);
+
     glBindBuffer(GL_ARRAY_BUFFER, s.NBO); glBufferData(GL_ARRAY_BUFFER, n.size() * 4, n.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0); glEnableVertexAttribArray(1);
+
     glBindBuffer(GL_ARRAY_BUFFER, s.CBO); glBufferData(GL_ARRAY_BUFFER, c.size() * 4, c.data(), GL_STATIC_DRAW);
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, 0); glEnableVertexAttribArray(2);
+
+    // [추가] 텍스처 좌표 버퍼 바인딩
+    if (!s.uvs.empty()) {
+        glBindBuffer(GL_ARRAY_BUFFER, s.TBO);
+        glBufferData(GL_ARRAY_BUFFER, s.uvs.size() * sizeof(float), s.uvs.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 0, 0); // location 3
+        glEnableVertexAttribArray(3);
+    }
+
     glBindVertexArray(0);
 }
 Shape* ShapeSave(std::vector<Shape>& list, char key, float r, float g, float b, float sx, float sy, float sz) {
     Shape s; s.color[0] = r; s.color[1] = g; s.color[2] = b; s.shapeType = key; s.primitiveType = GL_TRIANGLES;
+
     if (key == 'c') {
         float x = sx, y = sy, z = sz;
         s.vertices = { -x,-y,z, x,-y,z, x,y,z, -x,-y,z, x,y,z, -x,y,z, -x,-y,-z, -x,y,-z, x,y,-z, -x,-y,-z, x,y,-z, x,-y,-z, -x,-y,-z, -x,-y,z, -x,y,z, -x,-y,-z, -x,y,z, -x,y,-z, x,-y,z, x,-y,-z, x,y,-z, x,-y,z, x,y,-z, x,y,z, -x,y,z, x,y,z, x,y,-z, -x,y,z, x,y,-z, -x,y,-z, -x,-y,-z, x,-y,-z, x,-y,z, -x,-y,-z, x,-y,z, -x,-y,z };
         s.normals = { 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0 };
+        // 큐브는 텍스처를 안 쓰더라도 버퍼 크기를 맞춰주기 위해 0으로 채움
+        for (int i = 0; i < 36; i++) { s.uvs.push_back(0.0f); s.uvs.push_back(0.0f); }
         s.vertexCount = 36;
     }
     else if (key == '1') {
-        int sec = 30, st = 30; float rad = sx; std::vector<float> tv, tn;
+        int sec = 30, st = 30; float rad = sx;
+        std::vector<float> tv, tn, tuv; // tuv(텍스처좌표) 추가
+
         for (int i = 0; i <= st; ++i) {
             float ang = M_PI / 2 - i * M_PI / st, xy = rad * cosf(ang), z = rad * sinf(ang);
-            for (int j = 0; j <= sec; ++j) { float sa = j * 2 * M_PI / sec, x = xy * cosf(sa), y = xy * sinf(sa); tv.push_back(x); tv.push_back(y); tv.push_back(z); tn.push_back(x / rad); tn.push_back(y / rad); tn.push_back(z / rad); }
+            for (int j = 0; j <= sec; ++j) {
+                float sa = j * 2 * M_PI / sec, x = xy * cosf(sa), y = xy * sinf(sa);
+                tv.push_back(x); tv.push_back(y); tv.push_back(z);
+                tn.push_back(x / rad); tn.push_back(y / rad); tn.push_back(z / rad);
+
+                // [추가] UV 좌표 계산
+                tuv.push_back((float)j / sec);       // u
+                tuv.push_back((float)i / st);        // v
+            }
         }
         for (int i = 0; i < st; ++i) {
-            int k1 = i * (sec + 1), k2 = k1 + sec + 1; for (int j = 0; j < sec; ++j, ++k1, ++k2) {
-                if (i != 0) { s.vertices.insert(s.vertices.end(), { tv[k1 * 3],tv[k1 * 3 + 1],tv[k1 * 3 + 2], tv[k2 * 3],tv[k2 * 3 + 1],tv[k2 * 3 + 2], tv[(k1 + 1) * 3],tv[(k1 + 1) * 3 + 1],tv[(k1 + 1) * 3 + 2] }); s.normals.insert(s.normals.end(), { tn[k1 * 3],tn[k1 * 3 + 1],tn[k1 * 3 + 2], tn[k2 * 3],tn[k2 * 3 + 1],tn[k2 * 3 + 2], tn[(k1 + 1) * 3],tn[(k1 + 1) * 3 + 1],tn[(k1 + 1) * 3 + 2] }); }
-                if (i != st - 1) { s.vertices.insert(s.vertices.end(), { tv[(k1 + 1) * 3],tv[(k1 + 1) * 3 + 1],tv[(k1 + 1) * 3 + 2], tv[k2 * 3],tv[k2 * 3 + 1],tv[k2 * 3 + 2], tv[(k2 + 1) * 3],tv[(k2 + 1) * 3 + 1],tv[(k2 + 1) * 3 + 2] }); s.normals.insert(s.normals.end(), { tn[(k1 + 1) * 3],tn[(k1 + 1) * 3 + 1],tn[(k1 + 1) * 3 + 2], tn[k2 * 3],tn[k2 * 3 + 1],tn[k2 * 3 + 2], tn[(k2 + 1) * 3],tn[(k2 + 1) * 3 + 1],tn[(k2 + 1) * 3 + 2] }); }
+            int k1 = i * (sec + 1), k2 = k1 + sec + 1;
+            for (int j = 0; j < sec; ++j, ++k1, ++k2) {
+                if (i != 0) {
+                    s.vertices.insert(s.vertices.end(), { tv[k1 * 3],tv[k1 * 3 + 1],tv[k1 * 3 + 2], tv[k2 * 3],tv[k2 * 3 + 1],tv[k2 * 3 + 2], tv[(k1 + 1) * 3],tv[(k1 + 1) * 3 + 1],tv[(k1 + 1) * 3 + 2] });
+                    s.normals.insert(s.normals.end(), { tn[k1 * 3],tn[k1 * 3 + 1],tn[k1 * 3 + 2], tn[k2 * 3],tn[k2 * 3 + 1],tn[k2 * 3 + 2], tn[(k1 + 1) * 3],tn[(k1 + 1) * 3 + 1],tn[(k1 + 1) * 3 + 2] });
+                    // [추가] UV insert
+                    s.uvs.insert(s.uvs.end(), { tuv[k1 * 2],tuv[k1 * 2 + 1], tuv[k2 * 2],tuv[k2 * 2 + 1], tuv[(k1 + 1) * 2],tuv[(k1 + 1) * 2 + 1] });
+                }
+                if (i != st - 1) {
+                    s.vertices.insert(s.vertices.end(), { tv[(k1 + 1) * 3],tv[(k1 + 1) * 3 + 1],tv[(k1 + 1) * 3 + 2], tv[k2 * 3],tv[k2 * 3 + 1],tv[k2 * 3 + 2], tv[(k2 + 1) * 3],tv[(k2 + 1) * 3 + 1],tv[(k2 + 1) * 3 + 2] });
+                    s.normals.insert(s.normals.end(), { tn[(k1 + 1) * 3],tn[(k1 + 1) * 3 + 1],tn[(k1 + 1) * 3 + 2], tn[k2 * 3],tn[k2 * 3 + 1],tn[k2 * 3 + 2], tn[(k2 + 1) * 3],tn[(k2 + 1) * 3 + 1],tn[(k2 + 1) * 3 + 2] });
+                    // [추가] UV insert
+                    s.uvs.insert(s.uvs.end(), { tuv[(k1 + 1) * 2],tuv[(k1 + 1) * 2 + 1], tuv[k2 * 2],tuv[k2 * 2 + 1], tuv[(k2 + 1) * 2],tuv[(k2 + 1) * 2 + 1] });
+                }
             }
         }
         s.vertexCount = s.vertices.size() / 3;
     }
     for (int i = 0; i < s.vertexCount; ++i) { s.colors.push_back(r); s.colors.push_back(g); s.colors.push_back(b); }
-    setupShapeBuffers(s, s.vertices, s.colors, s.normals); list.push_back(s); return &list.back();
+
+    // setup 호출
+    setupShapeBuffers(s, s.vertices, s.colors, s.normals);
+    list.push_back(s); return &list.back();
 }
