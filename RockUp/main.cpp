@@ -112,6 +112,9 @@ bool isDragging = false;
 int lastMouseX = 0, lastMouseY = 0;
 float mouseSensitivity = 0.3f;
 
+// 카메라 가로 회전/ 세로 회전 모드 선택
+int camera_mode = 1;
+
 Player rock;
 int playerShapeIndex = -1;
 bool keyState[256] = { false };
@@ -297,6 +300,14 @@ void ResetGame() {
 // --- 콜백 함수들 ---
 GLvoid Keyboard(unsigned char key, int x, int y) {
     keyState[key] = true;
+    if (key == '1') {
+        camera_mode = 1;
+    }
+    if (key == '2')
+    {
+        camera_mode = 2;
+    }
+
     if (key == 'q' || key == 'Q') exit(0);
     if (key == 'r' || key == 'R') ResetGame();
 
@@ -318,7 +329,7 @@ GLvoid Keyboard(unsigned char key, int x, int y) {
 
         // 목표 지점 좌표 계산 (GenerateMap 함수 로직 참고)
         // goalY = (MAP_HEIGHT * 3.0f) + 5.0f; -> 150 * 3 + 5 = 455.0f
-        float goalY = (150 * 3.0f) + 5.0f;
+        float goalY = (150 * 3.0f) + 25.0f;
 
         // 플레이어를 목표 지점(455)보다 살짝 위(465)로 이동
         rock.position = glm::vec3(0.0f, goalY + 10.0f, 0.0f);
@@ -357,11 +368,45 @@ void Mouse(int button, int state, int x, int y) {
     }
 }
 
+//void Motion(int x, int y) {
+//    
+//}
+
 void Motion(int x, int y) {
+   
     if (isDragging) {
-        int dx = x - lastMouseX;
-        cameraYaw -= dx * mouseSensitivity;
-        lastMouseX = x; lastMouseY = y;
+
+        if (camera_mode == 1)
+        {
+            int dx = x - lastMouseX;
+            cameraYaw -= dx * mouseSensitivity;
+            lastMouseX = x; lastMouseY = y;
+            glutPostRedisplay();
+        }
+        else if (camera_mode == 2)
+        {
+            int dx = x - lastMouseX;
+            int dy = y - lastMouseY; // 세로 변화량 계산
+
+            if (abs(dx) > abs(dy)) {
+                // 가로(좌우) 움직임이 더 클 때 -> Yaw만 변경
+                cameraYaw -= dx * mouseSensitivity;
+            }
+            else {
+                // 세로(상하) 움직임이 더 클 때 -> Pitch만 변경
+                cameraPitch -= dy * mouseSensitivity;
+            }
+
+            // 위로 올려다보는 각도 제한 (숫자를 0에 가깝게 할수록 덜 쳐다봅니다)
+            if (cameraPitch < -5.0f) cameraPitch = -5.0f;
+
+            // 아래로 내려다보는 각도 제한 (발판 확인을 위해 넉넉하게)
+            if (cameraPitch > 40.0f) cameraPitch = 40.0f;
+
+            // 현재 마우스 위치 저장
+            lastMouseX = x;
+            lastMouseY = y;
+        }
         glutPostRedisplay();
     }
 }
