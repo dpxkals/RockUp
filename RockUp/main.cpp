@@ -115,7 +115,7 @@ int lastMouseX = 0, lastMouseY = 0;
 float mouseSensitivity = 0.3f;
 
 // 카메라 가로 회전/ 세로 회전 모드 선택
-int camera_mode = 1;
+int camera_mode = 2;
 
 Player rock;
 int playerShapeIndex = -1;
