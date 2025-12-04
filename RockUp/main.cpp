@@ -300,6 +300,33 @@ GLvoid Keyboard(unsigned char key, int x, int y) {
     if (key == 'q' || key == 'Q') exit(0);
     if (key == 'r' || key == 'R') ResetGame();
 
+    if (key == 'g' || key == 'G') {
+        printf("DEBUG: Teleport to Goal!\n");
+
+        // 만약 로비에서 바로 눌렀다면 강제로 게임 상태로 변경 및 맵 생성
+        if (currentState != PLAYING) {
+            currentState = PLAYING;
+            GenerateMap(); // 맵과 골인 지점(황금 상자) 생성
+
+            // 타이머 강제 시작 (테스트용)
+            if (!isTimerRunning) {
+                startTime = glutGet(GLUT_ELAPSED_TIME);
+                isTimerRunning = true;
+                gameTime = 0.0f;
+            }
+        }
+
+        // 목표 지점 좌표 계산 (GenerateMap 함수 로직 참고)
+        // goalY = (MAP_HEIGHT * 3.0f) + 5.0f; -> 150 * 3 + 5 = 455.0f
+        float goalY = (150 * 3.0f) + 5.0f;
+
+        // 플레이어를 목표 지점(455)보다 살짝 위(465)로 이동
+        rock.position = glm::vec3(0.0f, goalY + 10.0f, 0.0f);
+
+        // 떨어지면서 충돌하도록 속도 초기화
+        rock.velocity = glm::vec3(0.0f, 0.0f, 0.0f);
+    }
+
     if (key == ' ') {
         if (rock.isGrounded) {
             float speed = sqrt(rock.velocity.x * rock.velocity.x + rock.velocity.z * rock.velocity.z);
