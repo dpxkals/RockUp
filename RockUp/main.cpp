@@ -117,6 +117,12 @@ int playerShapeIndex = -1;
 bool keyState[256] = { false };
 bool isDoorOpen = false; // 바닥 열림 상태
 
+// 타이머 관련 변수
+float gameTime = 0.0f;     // 현재 플레이 시간 (초)
+int startTime = 0;         // 게임 시작 시점 (ms)
+bool isTimerRunning = false; // 타이머 작동 여부
+char timeBuffer[50];       // 시간 텍스트 저장용 문자열
+
 // 맵 설정
 const int MAP_WIDTH = 80;
 const int MAP_HEIGHT = 150;
@@ -178,6 +184,46 @@ unsigned int loadTexture(const char* path) {
     return textureID;
 }
 
+// 텍스트 렌더링 함수
+void RenderText(float x, float y, const char* text, float r, float g, float b, float scale) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_LIGHTING);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    gluOrtho2D(0, g_width, 0, g_height);
+
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    glTranslatef(x, y, 0.0f);
+    glScalef(scale, scale, 1.0f);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_LINE_SMOOTH);
+    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+
+    glLineWidth(2.0f); // 두께는 1.5f ~ 2.5f 사이로 조절해보세요
+    glColor3f(r, g, b);
+
+    for (const char* c = text; *c != '\0'; c++) {
+        glutStrokeCharacter(GLUT_STROKE_ROMAN, *c);
+    }
+
+    glDisable(GL_LINE_SMOOTH);
+    glDisable(GL_BLEND);
+
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+
+    glEnable(GL_DEPTH_TEST);
+}
+
 void main(int argc, char** argv)
 {
     // 랜덤 시드
@@ -225,6 +271,10 @@ void ResetGame() {
     currentState = LOBBY;
     rock.Reset();
     isDoorOpen = false; // 바닥 닫기
+
+    // 타이머 초기화
+    isTimerRunning = false;
+    gameTime = 0.0f;
 
     srand(mapSeed);
 
@@ -466,7 +516,7 @@ void UpdatePhysics() {
     rock.isGrounded = false;
 
     if (currentState == LOBBY) {
-        // [수정] 바닥 열림 애니메이션
+        // 바닥 열림 애니메이션
         if (isDoorOpen) {
             for (auto& s : lobbyShapes) {
                 if (s.isDoor) {
@@ -477,7 +527,7 @@ void UpdatePhysics() {
 
         if (nextPos.y > 175.0f) {
             for (const auto& block : lobbyBlocks) {
-                // [수정] 바닥이 열리면 바닥(y < 190 근처) 충돌 무시 -> 추락
+                // 바닥이 열리면 바닥(y < 190 근처) 충돌 무시 -> 추락
                 if (isDoorOpen && block.first.y < 190.0f) continue;
 
                 if (CheckCollision(nextPos, rock.radius, block.first, block.second)) {
@@ -500,9 +550,20 @@ void UpdatePhysics() {
             currentState = PLAYING; // 게임 시작
             GenerateMap();
             rock.velocity.y *= 0.5f;
+
+            // 타이머 시작
+            startTime = glutGet(GLUT_ELAPSED_TIME);
+            isTimerRunning = true;
+            gameTime = 0.0f;
         }
     }
     else if (currentState == PLAYING) {
+        // 타이머 갱신
+        if (isTimerRunning) {
+            int currentTime = glutGet(GLUT_ELAPSED_TIME);
+            gameTime = (currentTime - startTime) / 1000.0f; // 밀리초 -> 초 변환
+        }
+
         for (const auto& block : mapBlocks) {
             if (CheckCollision(nextPos, rock.radius, block.first, block.second)) {
 
@@ -511,11 +572,14 @@ void UpdatePhysics() {
                 if (block.first.y > 440.0f && abs(block.first.x) < 1.0f && abs(block.first.z) < 1.0f) {
                     currentState = CLEAR;
 
+                    // 타이머 정지
+                    isTimerRunning = false;
+
                     // [핵심] 벽과 발판을 모두 제거하여 시야를 뻥 뚫어줌
                     mapShapes.clear();
                     mapBlocks.clear();
 
-                    printf("GAME CLEAR!\n");
+                    printf("GAME CLEAR! Time: %.2f sec\n", gameTime);
                     return; // 함수 즉시 종료
                 }
 
@@ -683,6 +747,19 @@ GLvoid drawScene() {
         glEnable(GL_CULL_FACE);
     }
 
+    glUseProgram(0);
+
+    if (currentState == PLAYING || currentState == CLEAR) {
+        sprintf(timeBuffer, "TIME: %.2f", gameTime);
+        // scale 0.3f 적용 -> 적당히 큰 크기
+        RenderText(20, g_height - 80, timeBuffer, 0.7f, 0.0f, 0.0f, 0.7f);
+    }
+
+    if (currentState == CLEAR) {
+        // scale 0.5f 적용 -> 매우 큰 크기
+        RenderText(g_width / 2 - 200, g_height / 2, "GAME CLEAR!", 1.0f, 0.0f, 0.0f, 0.5f);
+        RenderText(g_width / 2 - 150, g_height / 2 - 100, timeBuffer, 1.0f, 0.0f, 0.0f, 0.4f);
+    }
     glBindVertexArray(0);
     glutSwapBuffers();
 }
@@ -693,7 +770,10 @@ void TimerFunction(int value) {
     glutTimerFunc(16, TimerFunction, 0);
 }
 
-GLvoid Reshape(int w, int h) { g_width = w; g_height = h; glViewport(0, 0, w, h); }
+GLvoid Reshape(int w, int h) { 
+    g_width = w; g_height = h; 
+    glViewport(0, 0, w, h); 
+}
 char* filetobuf(const char* file) {
     FILE* f = fopen(file, "rb"); if (!f) return NULL;
     fseek(f, 0, SEEK_END); long len = ftell(f); char* buf = (char*)malloc(len + 1);
