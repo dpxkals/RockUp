@@ -747,8 +747,8 @@ Shape* ShapeSave(std::vector<Shape>& list, char key, float r, float g, float b, 
         // [수정] 큐브 UV 좌표 추가
         s.uvs = { 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,1, 0,1, 0,0, 0,1, 1,0, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, };
         s.vertexCount = 36;
-    else if (key == '1') {
     }
+    else if (key == '1') {
         int sec = 30, st = 30; float rad = sx;
         std::vector<float> tv, tn, tuv; // tuv(텍스처좌표) 추가
 
