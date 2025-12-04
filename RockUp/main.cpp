@@ -55,6 +55,7 @@ struct Shape {
     int doorDirection = 0;
 
     bool isObstacle = false;
+    bool isWall = false; // [추가] 벽 식별 플래그
 };
 
 struct Player {
@@ -125,6 +126,7 @@ const int MAP_DEPTH = 80;
 unsigned int mapSeed = 327;
 
 GLuint rockTextureID; // 텍스처 ID 저장용
+GLuint wallTextureID; // [추가] 벽 텍스처 ID
 
 // --- 함수 선언 ---
 void make_vertexShaders();
@@ -198,6 +200,7 @@ void main(int argc, char** argv)
 
     // [추가] 텍스처 로드 및 유닛 설정
     rockTextureID = loadTexture("rock.png");
+    wallTextureID = loadTexture("background.png"); // [추가]
     glUseProgram(shaderProgramID);
     glUniform1i(glGetUniformLocation(shaderProgramID, "texture1"), 0); // 텍스처 유닛 0번
 
@@ -384,12 +387,16 @@ void GenerateMap() {
     float bgT = 1.0f;
     Shape* bg1 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgT, bgSize, bgSize); bg1->x = bgDist; bg1->y = 100; bg1->z = 0;
     bg1->isObstacle = true;
+    bg1->isWall = true;
     Shape* bg2 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgT, bgSize, bgSize); bg2->x = -bgDist; bg2->y = 100; bg2->z = 0;
     bg2->isObstacle = true;
+    bg2->isWall = true;
     Shape* bg3 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg3->x = 0; bg3->y = 100; bg3->z = bgDist;
     bg3->isObstacle = true;
+    bg3->isWall = true;
     Shape* bg4 = ShapeSave(mapShapes, 'c', 0.4f, 0.5f, 0.6f, bgSize, bgSize, bgT); bg4->x = 0; bg4->y = 100; bg4->z = -bgDist;
     bg4->isObstacle = true;
+    bg4->isWall = true;
 
     float range = (MAP_WIDTH / 2.0f) - 5.0f;
     for (int y = 0; y < MAP_HEIGHT; ++y) {
@@ -580,6 +587,12 @@ GLvoid drawScene() {
                     glBindTexture(GL_TEXTURE_2D, rockTextureID);
                     glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 1); // 텍스처 ON
                 }
+                // [추가] isWall 플래그가 true이면 벽 텍스처 사용
+                else if (s.isWall) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, wallTextureID);
+                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 1); // 텍스처 ON
+                }
                 else {
                     glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 0); // 텍스처 OFF
                 }
@@ -731,11 +744,11 @@ Shape* ShapeSave(std::vector<Shape>& list, char key, float r, float g, float b, 
         float x = sx, y = sy, z = sz;
         s.vertices = { -x,-y,z, x,-y,z, x,y,z, -x,-y,z, x,y,z, -x,y,z, -x,-y,-z, -x,y,-z, x,y,-z, -x,-y,-z, x,y,-z, x,-y,-z, -x,-y,-z, -x,-y,z, -x,y,z, -x,-y,-z, -x,y,z, -x,y,-z, x,-y,z, x,-y,-z, x,y,-z, x,-y,z, x,y,-z, x,y,z, -x,y,z, x,y,z, x,y,-z, -x,y,z, x,y,-z, -x,y,-z, -x,-y,-z, x,-y,-z, x,-y,z, -x,-y,-z, x,-y,z, -x,-y,z };
         s.normals = { 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1, -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0 };
-        // 큐브는 텍스처를 안 쓰더라도 버퍼 크기를 맞춰주기 위해 0으로 채움
-        for (int i = 0; i < 36; i++) { s.uvs.push_back(0.0f); s.uvs.push_back(0.0f); }
+        // [수정] 큐브 UV 좌표 추가
+        s.uvs = { 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,1, 0,1, 0,0, 0,1, 1,0, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, 0,0, 1,0, 1,1, 0,0, 1,1, 0,1, };
         s.vertexCount = 36;
-    }
     else if (key == '1') {
+    }
         int sec = 30, st = 30; float rad = sx;
         std::vector<float> tv, tn, tuv; // tuv(텍스처좌표) 추가
 
