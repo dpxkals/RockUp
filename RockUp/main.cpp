@@ -55,7 +55,9 @@ struct Shape {
     int doorDirection = 0;
 
     bool isObstacle = false;
-    bool isWall = false; // [추가] 벽 식별 플래그
+    bool isWall = false; //  벽 식별 플래그
+
+    GLuint specificTextureID = 0;
 };
 
 struct Player {
@@ -136,6 +138,8 @@ unsigned int mapSeed = 327;
 
 GLuint rockTextureID; // 텍스처 ID 저장용
 GLuint wallTextureID; // [추가] 벽 텍스처 ID
+
+GLuint texCtrl1, texCtrl2, texCtrl3, texCtrl4;
 
 // --- 함수 선언 ---
 void make_vertexShaders();
@@ -227,6 +231,75 @@ void RenderText(float x, float y, const char* text, float r, float g, float b, f
     glEnable(GL_DEPTH_TEST);
 }
 
+void FlipHorizontalUVs(Shape* s) {
+    if (s == NULL) return;
+
+    // UV 좌표는 { u, v, u, v ... } 순서로 저장됨
+    // 짝수 인덱스(0, 2, 4...)인 u 좌표만 반전시킴 (1.0 - u)
+    for (size_t i = 0; i < s->uvs.size(); i += 2) {
+        s->uvs[i] = 1.0f - s->uvs[i];
+    }
+
+    // 변경된 UV 좌표를 GPU 버퍼에 업데이트
+    if (s->TBO != 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, s->TBO);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, s->uvs.size() * sizeof(float), s->uvs.data());
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+}
+
+Shape* MakePoster(std::vector<Shape>& list, float x, float y, float z, float width, float height, char axis, int direction, GLuint texID) {
+    Shape s;
+    s.shapeType = 'p'; // poster
+    s.primitiveType = GL_TRIANGLES;
+    s.specificTextureID = texID;
+    s.color[0] = 1.0f; s.color[1] = 1.0f; s.color[2] = 1.0f;
+    s.x = x; s.y = y; s.z = z;
+
+    float w = width / 2.0f;
+    float h = height / 2.0f;
+
+    // 1. 정점(Vertex) 생성
+    if (axis == 'z') { // 앞/뒤 벽에 붙는 포스터
+        // direction: 1이면 Z+ 방향(정면), -1이면 Z- 방향(후면)을 바라봄
+        // 우리는 벽 '앞'에 붙여야 하므로, 벽이 Z-에 있으면 포스터는 Z+를 봐야 함.
+        if (direction == 1) {
+            // Z+ 방향 (로비 뒤쪽 벽에 붙어 정면을 봄 - 1번 포스터)
+            s.vertices = { -w,-h,0,  w,-h,0,  w, h,0,  -w,-h,0,  w, h,0,  -w, h,0 };
+            s.normals = { 0, 0,1,  0, 0,1,  0, 0,1,   0, 0,1,  0, 0,1,   0, 0,1 };
+        }
+        else {
+            // Z- 방향 (로비 앞쪽 벽에 붙어 뒤를 봄 - 4번 포스터)
+            s.vertices = { w,-h,0, -w,-h,0, -w, h,0,   w,-h,0, -w, h,0,   w, h,0 };
+            s.normals = { 0, 0,-1, 0, 0,-1, 0, 0,-1,  0, 0,-1, 0, 0,-1,  0, 0,-1 };
+        }
+    }
+    else if (axis == 'x') { // 좌/우 벽에 붙는 포스터
+        if (direction == 1) {
+            // X+ 방향 (로비 왼쪽 벽에 붙어 오른쪽을 봄 - 2번 포스터)
+            s.vertices = { 0,-h, w,  0,-h,-w,  0, h,-w,  0,-h, w,  0, h,-w,  0, h, w };
+            s.normals = { 1, 0, 0,  1, 0, 0,  1, 0, 0,  1, 0, 0,  1, 0, 0,  1, 0, 0 };
+        }
+        else {
+            // X- 방향 (로비 오른쪽 벽에 붙어 왼쪽을 봄 - 3번 포스터)
+            s.vertices = { 0,-h,-w,  0,-h, w,  0, h, w,  0,-h,-w,  0, h, w,  0, h,-w };
+            s.normals = { -1,0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0 };
+        }
+    }
+
+    // 2. 텍스처 좌표 (UV) - 상하 반전(Flip) 적용됨
+    s.uvs = {
+        0.0f, 1.0f,  1.0f, 1.0f,  1.0f, 0.0f,
+        0.0f, 1.0f,  1.0f, 0.0f,  0.0f, 0.0f
+    };
+
+    s.vertexCount = 6;
+
+    setupShapeBuffers(s, s.vertices, s.colors, s.normals);
+    list.push_back(s);
+    return &list.back();
+}
+
 void main(int argc, char** argv)
 {
     // 랜덤 시드
@@ -249,7 +322,13 @@ void main(int argc, char** argv)
 
     // [추가] 텍스처 로드 및 유닛 설정
     rockTextureID = loadTexture("rock.png");
-    wallTextureID = loadTexture("background.png"); // [추가]
+    wallTextureID = loadTexture("background.png");
+
+    texCtrl1 = loadTexture("game_ctrl1.png"); // WASD
+    texCtrl2 = loadTexture("game_ctrl2.png"); // Space
+    texCtrl3 = loadTexture("game_ctrl3.png"); // Mouse
+    texCtrl4 = loadTexture("game_ctrl4.png"); // Reset/Goal
+
     glUseProgram(shaderProgramID);
     glUniform1i(glGetUniformLocation(shaderProgramID, "texture1"), 0); // 텍스처 유닛 0번
 
@@ -368,10 +447,6 @@ void Mouse(int button, int state, int x, int y) {
     }
 }
 
-//void Motion(int x, int y) {
-//    
-//}
-
 void Motion(int x, int y) {
    
     if (isDragging) {
@@ -417,69 +492,85 @@ void GenerateLobby() {
     float size = 20.0f;
     float thickness = 1.0f;
 
-    // 1. 바닥을 좌우 두 개로 분할 (문 역할)
-    // 왼쪽 바닥
+    // 포스터 설정
+    float pWidth = 25.0f;     // 포스터 가로
+    float pHeight = 15.0f;     // 포스터 세로
+    float offset = thickness + 0.1f; // 벽에서 아주 살짝 띄움
+    float posterY = lobbyY - 7.0f;  // 눈높이
+
+    // 1. 바닥 (문) - 기존과 동일
     Shape* floorL = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size / 2, thickness, size);
     floorL->x = -size / 2; floorL->y = lobbyY - size; floorL->z = 0;
     floorL->initX = floorL->x; floorL->initY = floorL->y; floorL->initZ = floorL->z;
-    floorL->isDoor = true;
-    floorL->doorDirection = -1;  // 왼쪽으로 이동
+    floorL->isDoor = true; floorL->doorDirection = -1;
     lobbyBlocks.push_back({ glm::vec3(-size / 2, lobbyY - size, 0), glm::vec3(size / 2, thickness, size) });
 
-    // 오른쪽 바닥
     Shape* floorR = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size / 2, thickness, size);
     floorR->x = size / 2; floorR->y = lobbyY - size; floorR->z = 0;
     floorR->initX = floorR->x; floorR->initY = floorR->y; floorR->initZ = floorR->z;
-    floorR->isDoor = true;
-    floorR->doorDirection = 1;   // 오른쪽으로 이동
+    floorR->isDoor = true; floorR->doorDirection = 1;
     lobbyBlocks.push_back({ glm::vec3(size / 2, lobbyY - size, 0), glm::vec3(size / 2, thickness, size) });
 
-    // 2. 천장
+    // 2. 천장 - 기존과 동일
     Shape* ceil = ShapeSave(lobbyShapes, 'c', 0.3f, 0.3f, 0.3f, size, thickness, size);
     ceil->x = 0; ceil->y = lobbyY + size; ceil->z = 0;
     lobbyBlocks.push_back({ glm::vec3(0, lobbyY + size, 0), glm::vec3(size, thickness, size) });
 
-    // --- 3. 벽면들 ---
-    // 뒤 (Z = -size)
+
+    // --- 3. 벽면 생성 (회색 벽) ---
+    // 뒤 (WASD 쪽)
     Shape* back = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, size, size, thickness);
     back->x = 0; back->y = lobbyY; back->z = -size;
-    back->isObstacle = true; // [추가] 사이드뷰에서 가림
+    back->isObstacle = true; back->isWall = false;
+    lobbyBlocks.push_back({ glm::vec3(0, lobbyY, -size), glm::vec3(size, size, thickness) });
 
-    // 앞 (Z = size)
+    // 앞 (Reset 쪽)
     Shape* front = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, size, size, thickness);
     front->x = 0; front->y = lobbyY; front->z = size;
-    front->isObstacle = true; // [추가] 사이드뷰에서 가림
-
-    lobbyBlocks.push_back({ glm::vec3(0, lobbyY, -size), glm::vec3(size, size, thickness) });
+    front->isObstacle = true; front->isWall = false;
     lobbyBlocks.push_back({ glm::vec3(0, lobbyY, size), glm::vec3(size, size, thickness) });
 
-    // 좌/우 벽은 놔둡니다 (사이드뷰의 배경이 되어줌)
+    // 왼쪽 (Jump 쪽)
     Shape* left = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, thickness, size, size);
     left->x = -size; left->y = lobbyY; left->z = 0;
+    left->isWall = false;
     lobbyBlocks.push_back({ glm::vec3(-size, lobbyY, 0), glm::vec3(thickness, size, size) });
 
+    // 오른쪽 (Mouse 쪽)
     Shape* right = ShapeSave(lobbyShapes, 'c', 0.4f, 0.4f, 0.4f, thickness, size, size);
     right->x = size; right->y = lobbyY; right->z = 0;
+    right->isWall = false;
     lobbyBlocks.push_back({ glm::vec3(size, lobbyY, 0), glm::vec3(thickness, size, size) });
 
-    // 4. 낙하 터널 (시각 효과)
+
+    // --- 4. 포스터 부착 (MakePoster 사용) ---
+
+    // [3번] WASD: 뒤쪽 벽(-Z) 앞(offset)에 붙어, Z+ 방향(정면)을 바라봄
+    MakePoster(lobbyShapes, 0, posterY, -size + offset, pWidth, pHeight, 'z', 1, texCtrl3);
+
+    // [1번] Reset: 앞쪽 벽(+Z) 뒤(offset)에 붙어, Z- 방향(뒤)을 바라봄
+    MakePoster(lobbyShapes, 0, posterY, size - offset, pWidth, pHeight, 'z', -1, texCtrl1);
+
+    // [2번] Jump: 왼쪽 벽(-X) 옆(offset)에 붙어, X+ 방향(오른쪽)을 바라봄
+    MakePoster(lobbyShapes, -size + offset, posterY, 0, pWidth, pHeight, 'x', 1, texCtrl2);
+
+    // [4번] Mouse: 오른쪽 벽(+X) 옆(offset)에 붙어, X- 방향(왼쪽)을 바라봄
+    MakePoster(lobbyShapes, size - offset, posterY, 0, pWidth, pHeight, 'x', -1, texCtrl4);
+
+
+    // 5. 낙하 터널 - 기존과 동일
     float shaftHeight = 230.0f;
     float segmentH = 20.0f;
     float shaftR = size + 5.0f;
 
     for (float y = 0; y < shaftHeight; y += segmentH) {
         float g = (int(y / segmentH) % 2 == 0) ? 0.2f : 0.4f;
-
-        // 앞뒤를 막는 벽 (Z축 방향 벽) -> 가림 처리
         Shape* w1 = ShapeSave(lobbyShapes, 'c', g, g, g, shaftR, segmentH / 2, thickness);
-        w1->x = 0; w1->y = y - 20.0f; w1->z = shaftR;
-        w1->isObstacle = true; // [추가]
+        w1->x = 0; w1->y = y - 20.0f; w1->z = shaftR; w1->isObstacle = true;
 
         Shape* w2 = ShapeSave(lobbyShapes, 'c', g, g, g, shaftR, segmentH / 2, thickness);
-        w2->x = 0; w2->y = y - 20.0f; w2->z = -shaftR;
-        w2->isObstacle = true; // [추가]
+        w2->x = 0; w2->y = y - 20.0f; w2->z = -shaftR; w2->isObstacle = true;
 
-        // 좌우 벽은 놔둠
         Shape* w3 = ShapeSave(lobbyShapes, 'c', g - 0.1f, g - 0.1f, g - 0.1f, thickness, segmentH / 2, shaftR);
         w3->x = -shaftR; w3->y = y - 20.0f; w3->z = 0;
 
@@ -717,24 +808,32 @@ GLvoid drawScene() {
 
                 glUniform3fv(colorLoc, 1, s.color);
 
-                // [추가] 플레이어(구)일 때만 텍스처 사용
+                // --- [텍스처 선택 로직 수정] ---
+                GLuint textureToUse = 0;
+
                 if (isPlayer && s.shapeType == '1') {
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, rockTextureID);
-                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 1); // 텍스처 ON
+                    textureToUse = rockTextureID;
                 }
-                // [추가] isWall 플래그가 true이면 벽 텍스처 사용
+                else if (s.specificTextureID != 0) {
+                    // [핵심] 이 도형 전용 텍스처(포스터)가 있으면 그것을 사용
+                    textureToUse = s.specificTextureID;
+                }
                 else if (s.isWall) {
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, wallTextureID);
-                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 1); // 텍스처 ON
-                }
-                else {
-                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 0); // 텍스처 OFF
+                    textureToUse = wallTextureID;
                 }
 
+                // 텍스처 바인딩
+                if (textureToUse != 0) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, textureToUse);
+                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 1); // ON
+                }
+                else {
+                    glUniform1i(glGetUniformLocation(shaderProgramID, "useTexture"), 0); // OFF
+                }
+                // -----------------------------
+
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(s.x, s.y, s.z));
-                // [수정] 플레이어인 경우 회전 적용
                 if (isPlayer && s.shapeType == '1') {
                     model = model * glm::mat4_cast(rock.orientation);
                 }
@@ -746,7 +845,7 @@ GLvoid drawScene() {
                 glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
                 glBindVertexArray(s.VAO); glDrawArrays(s.primitiveType, 0, s.vertexCount);
             }
-            };
+        };
 
         // 플레이어 그리기
         drawList(shapes, true);
