@@ -19,6 +19,7 @@
 #include <gl/glm/glm.hpp>
 #include <gl/glm/ext.hpp>
 #include <gl/glm/gtc/matrix_transform.hpp>
+#include <gl/glm/gtc/quaternion.hpp>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -61,6 +62,7 @@ struct Player {
     glm::vec3 velocity;
     float radius;
     bool isGrounded;
+    glm::quat orientation; // [추가] 구의 회전을 저장할 쿼터니언
 
     float acceleration;
     float maxSpeed;
@@ -76,6 +78,7 @@ struct Player {
         velocity = glm::vec3(0.0f, 0.0f, 0.0f);
         radius = 1.2f;
         isGrounded = false;
+        orientation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); // [추가] 회전 초기화
         acceleration = 0.008f;
         maxSpeed = 0.3f;
         friction = 0.96f;
@@ -424,6 +427,17 @@ bool CheckCollision(glm::vec3 spherePos, float radius, glm::vec3 boxPos, glm::ve
 }
 
 void UpdatePhysics() {
+    // [수정] 구 회전 계산 로직을 속도 기반으로 변경
+    glm::vec3 horizontalVelocity = glm::vec3(rock.velocity.x, 0.0f, rock.velocity.z);
+    float speed = glm::length(horizontalVelocity);
+    if (speed > 0.001f) {
+        glm::vec3 rotationAxis = glm::cross(glm::vec3(0, 1, 0), horizontalVelocity);
+        rotationAxis = glm::normalize(rotationAxis);
+        float rotationAngle = speed / rock.radius;
+        glm::quat rotationDelta = glm::angleAxis(rotationAngle, rotationAxis);
+        rock.orientation = rotationDelta * rock.orientation;
+    }
+
     glm::vec3 viewDir = rock.position - cameraPos;
     viewDir.y = 0.0f;
     glm::vec3 fwd = glm::normalize(viewDir);
@@ -571,6 +585,11 @@ GLvoid drawScene() {
                 }
 
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(s.x, s.y, s.z));
+                // [수정] 플레이어인 경우 회전 적용
+                if (isPlayer && s.shapeType == '1') {
+                    model = model * glm::mat4_cast(rock.orientation);
+                }
+
                 if (isMiniMap && isPlayer) {
                     model = glm::scale(model, glm::vec3(1.0f, 1.0f, 1.0f));
                 }
